@@ -168,6 +168,24 @@ methods["GuiService.ClearError"] = function() end
 -- To the app shell, which a Play session doesn't have.
 methods["GuiService.BroadcastNotification"] = function() end
 methods["GuiService.SetPurchasePromptIsShown"] = function() end
+-- The keys the CoreScripts ask to hear (KeyPressed / SpecialKeyPressed) and
+-- the safe viewport: the whole view on a desktop (estimate). Browser and
+-- native overlays have nowhere to open in a Play session.
+gs_state.keys, gs_state.special_keys = {}, {}
+methods["GuiService.AddKey"] = function(_, k) gs_state.keys[tostring(k)] = true end
+methods["GuiService.RemoveKey"] = function(_, k) gs_state.keys[tostring(k)] = nil end
+methods["GuiService.AddSpecialKey"] = function(_, k) gs_state.special_keys[k] = true end
+methods["GuiService.RemoveSpecialKey"] = function(_, k) gs_state.special_keys[k] = nil end
+methods["GuiService.GetHardwareSafeViewport"] = function()
+    refresh_game()
+    local ws = svc("Workspace")
+    local cam = ws and ws.CurrentCamera
+    return if cam then cam.ViewportSize else Vector2.zero
+end
+methods["GuiService.CloseStatsBasedOnInputString"] = function() return false end
+methods["GuiService.OpenBrowserWindow"] = function() end
+methods["GuiService.OpenNativeOverlay"] = function() end
+methods["GuiService.ToggleFullscreen"] = function() end
 -- Center dialogs: shown at once, hidden on removal (no queue: estimate).
 local center_dialogs = {}
 methods["GuiService.AddCenterDialog"] = function(_, dialog, _, show, hide)

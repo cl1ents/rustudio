@@ -3484,6 +3484,14 @@ fn set_attr(lua: &Lua, r: Ref, name: &str, var: Option<Variant>) -> mlua::Result
     Ok(())
 }
 
+/// Whether `key` is a callback of `r`'s class in the API dump.
+fn api_callback(lua: &Lua, r: Ref, key: &str) -> bool {
+    let Some(class) = world(lua).ok().and_then(|w| w.d().class_of(r)) else { return false };
+    rustudio_core::api::get()
+        .and_then(|a| a.lookup(&class, key))
+        .is_some_and(|(_, m)| matches!(m.kind, rustudio_core::api::Kind::Callback))
+}
+
 fn set_callback(lua: &Lua, r: Ref, key: &str, value: Value) -> mlua::Result<()> {
     let mut c = cache(lua)?;
     match value {
@@ -3583,6 +3591,10 @@ fn newindex_routed(
         "OnInvoke" | "OnServerInvoke" | "OnClientInvoke" => {
             return set_callback(lua, r, key, value)
         }
+        // Any other callback member of the API dump (GuiService.
+        // SendCoreUiNotification, which NotificationScript2 assigns): kept
+        // for whatever invokes it.
+        _ if api_callback(lua, r, key) => return set_callback(lua, r, key, value),
         // Script.Enabled is Disabled turned round: places save Disabled, and
         // that is what decides whether it runs. Place B Newer's
         // MusicSystemInitializer parents ModernMusicGui and then sets its
@@ -3735,7 +3747,15 @@ fn newindex_routed(
         )));
     };
     let canon = info.canon.as_str();
-    if info.read_only {
+    // (A property rbx-dom calls read-only that the API dump lets the
+    // CoreScripts write, ScreenGui.OnTopOfCoreBlur: the security check
+    // already ran, so it takes the write.)
+    let api_writable = || {
+        rustudio_core::api::get()
+            .and_then(|a| a.lookup(class, key))
+            .is_some_and(|(_, m)| matches!(m.kind, rustudio_core::api::Kind::Property) && !m.read_only)
+    };
+    if info.read_only && !(security::current(lua) == security::CORE && api_writable()) {
         return Err(rt_err(format!(
             "Unable to assign property {key}. Property is read only"
         )));
@@ -6406,7 +6426,11 @@ impl Runtime {
         if let Ok(mut w) = world(&self.lua) {
             w.core_scripts = installed;
         }
-        match start_core_script(&self.lua, "StarterScript", Ref::none()) {
+        // Under CoreGui: StarterScript hands `script.Parent` to
+        // AddCoreScriptLocal for several CoreScripts (StarterScript.lua),
+        // while its chunk keeps the bare name Roblox reports.
+        let core_gui = world(&self.lua).ok().and_then(|w| w.d().find_child(w.d().dom.root_ref(), "CoreGui")).unwrap_or_else(Ref::none);
+        match start_core_script(&self.lua, "StarterScript", core_gui, Some("StarterScript")) {
             Ok(Some(_)) => Ok(()),
             Ok(None) => Err("the data model patch has no StarterScript".into()),
             Err(e) => Err(describe_error(&e)),
@@ -7104,11 +7128,11 @@ fn compile_script(lua: &Lua, r: Ref, shared: &Table) -> mlua::Result<Function> {
 
 /// Starts the CoreScript `name` of Studio's data model patch
 /// (`PatchRoot.CoreScripts`, core_scripts.rs) as a CoreScript instance under
-/// `parent` (none: parentless, as the engine's own StarterScript), at the
-/// CoreScript identity. Its chunk is `=` + its full name, the names Roblox
-/// reports (`StarterScript`, `CoreGui.RobloxGui.CoreScripts/<Name>`) and
-/// security::internal_chunk knows. None when the patch has no such script.
-pub(crate) fn start_core_script(lua: &Lua, name: &str, parent: Ref) -> mlua::Result<Option<Ref>> {
+/// `parent`, at the CoreScript identity. Its chunk is `=` + `chunk`, else
+/// its full name: the names Roblox reports (`StarterScript`,
+/// `CoreGui.RobloxGui.CoreScripts/<Name>`) and security::internal_chunk
+/// knows. None when the patch has no such script.
+pub(crate) fn start_core_script(lua: &Lua, name: &str, parent: Ref, chunk: Option<&str>) -> mlua::Result<Option<Ref>> {
     let (r, code, full) = {
         let mut w = world(lua)?;
         let Some(code) = w.core_scripts.scripts.get(name).cloned() else { return Ok(None) };
@@ -7120,7 +7144,7 @@ pub(crate) fn start_core_script(lua: &Lua, name: &str, parent: Ref) -> mlua::Res
         }
         w.structure_changed = true;
         w.started.insert(r);
-        let full = w.full_name(r);
+        let full = chunk.map(str::to_string).unwrap_or_else(|| w.full_name(r));
         (r, code, full)
     };
     let env = crate::globals_parity::new_env(lua, Some(inst_value(lua, r)?))?;

@@ -40,6 +40,31 @@ pub(super) fn install(lua: &Lua, rs: &Table) -> mlua::Result<()> {
             inst_value(lua, r)
         })?,
     )?;
+    // HttpService:RequestInternal's requests: Roblox web APIs as the signed-in
+    // player (the CoreScripts' own web calls), through the login session.
+    rs.set(
+        "web_start",
+        lua.create_function(|_, (method, url, body): (String, String, Option<String>)| {
+            let host = url.strip_prefix("https://").and_then(|r| r.split('/').next()).unwrap_or("");
+            if !(host == "roblox.com" || host.ends_with(".roblox.com")) {
+                return Ok(None);
+            }
+            Ok(Some(super::super::avatar::web::start(&method, url, body)))
+        })?,
+    )?;
+    rs.set(
+        "web_poll",
+        lua.create_function(|lua, id: u64| {
+            Ok(match super::super::avatar::web::poll(id) {
+                None => MultiValue::new(),
+                Some(Ok((status, text))) => MultiValue::from_vec(vec![
+                    Value::Integer(status as i64),
+                    Value::String(lua.create_string(text)?),
+                ]),
+                Some(Err(e)) => MultiValue::from_vec(vec![Value::Integer(0), Value::String(lua.create_string(e)?)]),
+            })
+        })?,
+    )?;
     let m: Table = lua.load(include_str!("services_core.luau")).set_name("=rustudio.services.core").call(rs.clone())?;
     lua.set_named_registry_value("svc_core_impl", m)
 }
@@ -73,6 +98,11 @@ fn one(lua: &Lua, f: Fast) -> mlua::Result<MultiValue> {
 /// settings():GetFFlag / GetFVariable for a CoreScript: a flag it defined,
 /// else false / "" (estimate, as GetFast*).
 pub(super) fn settings_flag(lua: &Lua, method: &str, flag: &str) -> mlua::Result<MultiValue> {
+    // The engine's own in-game GUI inset (the in-game menu's player page adds
+    // to it): the top bar height rustudio lays GUIs out under.
+    if flag == "InGameGlobalGuiInset" {
+        return one(lua, Fast::Str((rustudio_core::mech::GUI_TOP_INSET as i64).to_string()));
+    }
     let defined = super::state(lua)?.fast_flags.0.get(flag).cloned();
     let v = match (method, defined) {
         ("GetFFlag", Some(Fast::Flag(b))) => Fast::Flag(b),
@@ -107,10 +137,38 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
             let f: Function = m.get(format!("{owner}.{name}"))?;
             f.call(args.clone())
         }
+        // A model from the client's own content (rbxasset://), for the
+        // CoreScripts' bundled models: content/, else Studio's ExtraContent
+        // (rbxasset://models/ServerCoreScripts.rbxm lives in
+        // ExtraContent/models). Its one top instance, parentless.
+        "LoadLocalAsset" => {
+            let id = name_arg(args, name)?;
+            let rest = id.trim().strip_prefix("rbxasset://").ok_or_else(|| rt_err(format!("LoadLocalAsset: {id} is not an rbxasset:// path")))?;
+            let path = rustudio_core::assets::resolve(&id, None)
+                .filter(|p| p.is_file())
+                .or_else(|| {
+                    let p = rustudio_core::default_scripts::studio_dir()?.join("ExtraContent").join(rest.trim_start_matches('/'));
+                    (p.is_file() && !rest.contains("..")).then_some(p)
+                })
+                .ok_or_else(|| rt_err(format!("LoadLocalAsset: {id} not found")))?;
+            let bytes = std::fs::read(&path).map_err(|e| rt_err(format!("LoadLocalAsset: {e}")))?;
+            let mut tmp = rustudio_core::doc::Document::decode(&bytes).map_err(|e| rt_err(format!("LoadLocalAsset: {e}")))?;
+            let top = tmp.root().children().first().copied().ok_or_else(|| rt_err(format!("LoadLocalAsset: {id} is empty")))?;
+            {
+                let mut w = world(lua)?;
+                // (transfer needs a parent: in at the root, then out to none)
+                let root = w.d().dom.root_ref();
+                tmp.transfer(top, &mut w.dm().dom, root);
+                w.dm().dom.transfer_within(top, Ref::none());
+                w.orphans.insert(top);
+                w.structure_changed = true;
+            }
+            Ok(MultiValue::from_iter([inst_value(lua, top)?]))
+        }
         "AddCoreScriptLocal" => {
             let script = name_arg(args, name)?;
             let parent = opt_inst(&arg(args, 2)).ok_or_else(|| rt_err("AddCoreScriptLocal: Argument 2 missing or nil"))?;
-            if start_core_script(lua, &script, parent)?.is_none() {
+            if start_core_script(lua, &script, parent, None)?.is_none() {
                 return Err(rt_err(format!("AddCoreScriptLocal: no CoreScript named '{script}'")));
             }
             Ok(MultiValue::new())

@@ -268,4 +268,155 @@ for kind, layers in ixp_layers do
 end
 M["IXPService.LogFlagLinkedUserLayerExposure"] = function(self, name) str_arg(name, 1) end
 
+------------------------------------------------------------ MemStorageService
+-- The app's in-memory key / value store with change callbacks: Bind(key, fn)
+-- runs fn(value) on each SetItem / Fire of that key; BindAndFire also runs it
+-- now with the current value.
+local mem, mem_binds, mem_owner = {}, {}, {}
+local function mem_fire(key, value)
+	for conn, fn in mem_binds[key] or {} do task.spawn(fn, value) end
+end
+local function mem_bind(key, fn)
+	if type(fn) ~= "function" then fail("Argument 2 missing or nil") end
+	local conn = rs.new_object("MemStorageConnection")
+	mem_binds[key] = mem_binds[key] or {}
+	mem_binds[key][conn] = fn
+	mem_owner[conn] = key
+	return conn
+end
+M["MemStorageService.GetItem"] = function(self, key, default)
+	local v = mem[str_arg(key, 1)]
+	if v == nil then return default end
+	return v
+end
+M["MemStorageService.SetItem"] = function(self, key, value)
+	str_arg(key, 1)
+	mem[key] = tostring(value)
+	mem_fire(key, mem[key])
+end
+M["MemStorageService.HasItem"] = function(self, key) return mem[str_arg(key, 1)] ~= nil end
+M["MemStorageService.RemoveItem"] = function(self, key)
+	local had = mem[str_arg(key, 1)] ~= nil
+	mem[key] = nil
+	return had
+end
+M["MemStorageService.Fire"] = function(self, key, value) mem_fire(str_arg(key, 1), value) end
+M["MemStorageService.Bind"] = function(self, key, fn) return mem_bind(str_arg(key, 1), fn) end
+M["MemStorageService.BindAndFire"] = function(self, key, fn)
+	local conn = mem_bind(str_arg(key, 1), fn)
+	task.spawn(fn, mem[key])
+	return conn
+end
+M["MemStorageService.Call"] = function(self, key) str_arg(key, 1) return nil end
+M["MemStorageConnection.Disconnect"] = function(self)
+	local key = mem_owner[self]
+	if key and mem_binds[key] then mem_binds[key][self] = nil end
+	mem_owner[self] = nil
+end
+
+------------------------------------------------------------ NotificationService
+-- Roblox's real-time push channel: a Play session isn't connected to it, so
+-- subscriptions take nothing and its events never fire (stubs).
+for _, n in { "ActionEnabled", "ActionTaken", "SubscribeToRccEventNamespace", "SubscribeToTopic",
+	"UnsubscribeFromTopic", "SwitchedToAppShellFeature" } do
+	M["NotificationService." .. n] = function() end
+end
+
+------------------------------------------------------------ ThirdPartyUserService
+-- Console / third-party sign-in: a desktop Play session has none.
+M["ThirdPartyUserService.IsSingleSignOnSupported"] = function() return false end
+M["ThirdPartyUserService.IsAccountSwitchingSupported"] = function() return false end
+M["ThirdPartyUserService.IsChatRestrictionSupported"] = function() return false end
+M["ThirdPartyUserService.HaveActiveUser"] = function() return false end
+M["ThirdPartyUserService.GetUserPlatformName"] = function() return "" end
+M["ThirdPartyUserService.ShowAccountPicker"] = function() end
+
+------------------------------------------------------------ AdService
+-- No ad network in a Play session: no ad teleport, nothing to report, no
+-- ads loaded (stubs).
+-- (source universe, destination universe): 0, 0 for no ad teleport, as
+-- BackButtonController compares them with numbers.
+M["AdService.GetAdTeleportInfo"] = function() return 0, 0 end
+M["AdService.GetReportAdInfo"] = function() return {} end
+M["AdService.GetUniversalAppAdsEligibility"] = function() return {} end
+M["AdService.IsAdLoaded"] = function() return false end
+M["AdService.SetAdGuiInteractivityHandlerInitialized"] = function() end
+M["AdService.HideEudsaDisclosure"] = function() end
+
+------------------------------------------------------------ VRService / AvatarChatService
+-- No VR app build, and none of the avatar-chat (face tracking, voice)
+-- features in a Play session: the CoreScripts skip them (estimates).
+M["VRService.IsVRAppBuild"] = function() return false end
+M["AvatarChatService.deviceMeetsRequirementsForFeature"] = function() return false end
+M["AvatarChatService.IsEnabled"] = function() return false end
+M["AvatarChatService.IsPlaceEnabled"] = function() return false end
+M["AvatarChatService.IsUniverseEnabled"] = function() return false end
+M["AvatarChatService.EnableVoice"] = function() return false end
+M["AvatarChatService.PollClientFeatures"] = function() return 0 end
+M["AvatarChatService.PollServerFeatures"] = function() return 0 end
+M["AvatarChatService.GetClientFeaturesAsync"] = function() return 0 end
+M["AvatarChatService.GetServerFeaturesAsync"] = function() return 0 end
+
+------------------------------------------------------------ the rest
+-- Platform achievements (consoles): none here.
+M["AchievementService.IsAvailable"] = function() return false end
+M["AchievementService.HasAchieved"] = function() return false end
+M["AchievementService.GrantAchievement"] = function() return false end
+-- The CoreScripts' own view of an Animator's playing tracks: the same list
+-- games get.
+M["Animator.GetPlayingAnimationTracksCoreScript"] = function(self) return self:GetPlayingAnimationTracks() end
+-- Event ingestion (telemetry): no backend in a Play session (stubs).
+for _, n in { "SendEventDeferred", "SendEventImmediately", "SetRBXEvent", "SetRBXEventStream" } do
+	M["EventIngestService." .. n] = function() end
+end
+
+------------------------------------------------------------ HttpService:RequestInternal
+-- The CoreScripts' web requests (an HttpRequest; Start(callback) answers
+-- callback(success, { StatusCode, Body, ... })). Roblox's web APIs answer
+-- as the signed-in player through rustudio's login session; any other host
+-- fails as a connection error. GET and POST only.
+local requests = {}
+M["HttpService.RequestInternal"] = function(self, options)
+	if type(options) ~= "table" then fail("Argument 1 missing or nil") end
+	local req = rs.new_object("HttpRequest")
+	requests[req] = options
+	return req
+end
+M["HttpRequest.Start"] = function(self, callback)
+	local o = requests[self]
+	requests[self] = nil
+	if not o then fail("HttpRequest already started") end
+	task.spawn(function()
+		local id = rs.web_start(string.upper(tostring(o.Method or "GET")), tostring(o.Url), o.Body)
+		if not id then
+			if type(callback) == "function" then callback(false, { StatusCode = 0, Body = "", StatusMessage = "HttpError: ConnectFail" }) end
+			return
+		end
+		local status, body
+		repeat
+			task.wait()
+			status, body = rs.web_poll(id)
+		until status ~= nil
+		if type(callback) ~= "function" then return end
+		if status == 0 then
+			callback(false, { StatusCode = 0, Body = body, StatusMessage = body })
+		else
+			callback(true, { StatusCode = status, Body = body, Headers = {}, StatusMessage = tostring(status) })
+		end
+	end)
+end
+M["HttpRequest.Cancel"] = function(self) requests[self] = nil end
+
+------------------------------------------------------------ CaptureService
+-- Screenshots and videos the app saved: none in a Play session, and no
+-- video capture (stubs; CaptureScreenshot and friends live in assets_cloud).
+M["CaptureService.RetrieveCaptures"] = function() return {} end
+M["CaptureService.CanCaptureVideo"] = function() return false end
+M["CaptureService.IsCapturingVideo"] = function() return false end
+for _, n in { "OnCaptureBegan", "OnCaptureEnded", "OnCaptureShared", "OnCaptureObjectShared", "OnVideoCaptureShared",
+	"OnSavePromptFinished", "OnSharePromptFinished", "OnCapturePermissionsPromptFinished", "DeleteCapture",
+	"SaveCaptureToExternalStorage", "SaveScreenshotCapture", "StopVideoCaptureInternal" } do
+	M["CaptureService." .. n] = function() end
+end
+
 return M

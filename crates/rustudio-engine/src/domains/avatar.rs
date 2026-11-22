@@ -147,6 +147,13 @@ pub fn prop_get(lua: &Lua, r: Ref, class: &str, key: &str) -> mlua::Result<Optio
     if let Some(v) = props::prop_get(lua, r, class, key)? {
         return Ok(Some(v));
     }
+    // The emotes whose assets the client has: every emote of the
+    // description (rustudio doesn't load them ahead; estimate). Read by the
+    // CoreScripts' emotes menu (RobloxScriptSecurity).
+    if class == "HumanoidDescription" && key == "NumberEmotesLoaded" {
+        let n: usize = desc::emotes(lua, r)?.iter().map(|(_, ids)| ids.len()).sum();
+        return Ok(Some(Value::Integer(n as i64)));
+    }
     if class == "FaceControls" {
         if let Some(v) = face::prop_get(lua, r, key)? {
             return Ok(Some(v));

@@ -927,16 +927,20 @@ impl UserData for LUDim2 {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
-        m.add_method("Lerp", |_, this, (o, a): (LUDim2, f32)| {
-            let l = |p: LUDim, q: LUDim| LUDim {
-                scale: p.scale + (q.scale - p.scale) * a,
-                offset: (p.offset as f32 + (q.offset - p.offset) as f32 * a).round() as i32,
-            };
-            Ok(LUDim2 {
-                x: l(this.x, o.x),
-                y: l(this.y, o.y),
-            })
-        });
+        // (`lerp` too, the old lowercase name: Roblox's CoreScripts' Console
+        // package still calls it.)
+        for name in ["Lerp", "lerp"] {
+            m.add_method(name, |_, this, (o, a): (LUDim2, f32)| {
+                let l = |p: LUDim, q: LUDim| LUDim {
+                    scale: p.scale + (q.scale - p.scale) * a,
+                    offset: (p.offset as f32 + (q.offset - p.offset) as f32 * a).round() as i32,
+                };
+                Ok(LUDim2 {
+                    x: l(this.x, o.x),
+                    y: l(this.y, o.y),
+                })
+            });
+        }
         m.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(format!(
                 "{{{}, {}}}, {{{}, {}}}",

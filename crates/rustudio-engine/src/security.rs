@@ -93,8 +93,10 @@ fn legacy_granted(id: u8) -> u8 {
 fn sandbox_denied(id: u8) -> u8 {
     let _ = (SB_INTERNAL_TEST, SB_REMOTE_COMMAND, SB_ASSISTANT);
     match id {
-        // (A plugin reads RunService.RunState: measured.)
-        COMMAND | PLUGIN_IDENT => 0,
+        // (A plugin reads RunService.RunState: measured. The CoreScripts
+        // call RunService:IsEdit unguarded at start, StarterScript line 360,
+        // so their identity has it too.)
+        COMMAND | PLUGIN_IDENT | CORE => 0,
         _ => SB_PLUGIN_OR_OPEN_CLOUD,
     }
 }
@@ -524,11 +526,16 @@ pub fn index_hook(lua: &Lua, r: Ref, key: &str) -> mlua::Result<Option<Value>> {
             gate(lua, rule, key).map(|f| Some(Value::Function(f)))
         }
         MKind::Event => {
-            if check(lua, "connect", key, None, rule.read).is_ok() {
-                return Ok(None);
-            }
             // Studio's event exists even where rustudio has no behaviour:
-            // a signal whose Connect / Wait refuse.
+            // for a thread allowed to connect (the CoreScripts at identity
+            // 4), a signal nothing fires yet; for others, one whose Connect /
+            // Wait refuse.
+            if check(lua, "connect", key, None, rule.read).is_ok() {
+                return match index(lua, r, key) {
+                    Ok(v) => Ok(Some(v)),
+                    Err(_) => signal(lua, r, key).map(Some),
+                };
+            }
             match index(lua, r, key) {
                 Ok(v) => Ok(Some(v)),
                 Err(_) => signal(lua, r, key).map(Some),

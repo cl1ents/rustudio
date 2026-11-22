@@ -133,6 +133,71 @@ pub const METHODS: &[(&str, &str)] = &[
     ("GetBrowserTrackerStatusForLayer", "IXPService"),
     ("LogBrowserTrackerLayerExposure", "IXPService"),
     ("LogFlagLinkedUserLayerExposure", "IXPService"),
+    ("GetItem", "MemStorageService"),
+    ("SetItem", "MemStorageService"),
+    ("HasItem", "MemStorageService"),
+    ("RemoveItem", "MemStorageService"),
+    ("Fire", "MemStorageService"),
+    ("Bind", "MemStorageService"),
+    ("BindAndFire", "MemStorageService"),
+    ("Call", "MemStorageService"),
+    ("Disconnect", "MemStorageConnection"),
+    ("ActionEnabled", "NotificationService"),
+    ("ActionTaken", "NotificationService"),
+    ("SubscribeToRccEventNamespace", "NotificationService"),
+    ("SubscribeToTopic", "NotificationService"),
+    ("UnsubscribeFromTopic", "NotificationService"),
+    ("SwitchedToAppShellFeature", "NotificationService"),
+    ("IsSingleSignOnSupported", "ThirdPartyUserService"),
+    ("IsAccountSwitchingSupported", "ThirdPartyUserService"),
+    ("IsChatRestrictionSupported", "ThirdPartyUserService"),
+    ("HaveActiveUser", "ThirdPartyUserService"),
+    ("GetUserPlatformName", "ThirdPartyUserService"),
+    ("ShowAccountPicker", "ThirdPartyUserService"),
+    ("GetAdTeleportInfo", "AdService"),
+    ("GetReportAdInfo", "AdService"),
+    ("GetUniversalAppAdsEligibility", "AdService"),
+    ("IsAdLoaded", "AdService"),
+    ("SetAdGuiInteractivityHandlerInitialized", "AdService"),
+    ("HideEudsaDisclosure", "AdService"),
+    ("IsVRAppBuild", "VRService"),
+    ("LoadLocalAsset", "InsertService"),
+    ("deviceMeetsRequirementsForFeature", "AvatarChatService"),
+    ("IsEnabled", "AvatarChatService"),
+    ("IsPlaceEnabled", "AvatarChatService"),
+    ("IsUniverseEnabled", "AvatarChatService"),
+    ("EnableVoice", "AvatarChatService"),
+    ("PollClientFeatures", "AvatarChatService"),
+    ("PollServerFeatures", "AvatarChatService"),
+    ("GetClientFeaturesAsync", "AvatarChatService"),
+    ("GetServerFeaturesAsync", "AvatarChatService"),
+    ("IsAvailable", "AchievementService"),
+    ("HasAchieved", "AchievementService"),
+    ("GrantAchievement", "AchievementService"),
+    ("GetPlayingAnimationTracksCoreScript", "Animator"),
+    ("SendEventDeferred", "EventIngestService"),
+    ("SendEventImmediately", "EventIngestService"),
+    ("SetRBXEvent", "EventIngestService"),
+    ("SetRBXEventStream", "EventIngestService"),
+    ("RequestInternal", "HttpService"),
+    ("Start", "HttpRequest"),
+    ("Cancel", "HttpRequest"),
+    ("RetrieveCaptures", "CaptureService"),
+    ("CanCaptureVideo", "CaptureService"),
+    ("IsCapturingVideo", "CaptureService"),
+    ("OnCaptureBegan", "CaptureService"),
+    ("OnCaptureEnded", "CaptureService"),
+    ("OnCaptureShared", "CaptureService"),
+    ("OnCaptureObjectShared", "CaptureService"),
+    ("OnVideoCaptureShared", "CaptureService"),
+    ("OnSavePromptFinished", "CaptureService"),
+    ("OnSharePromptFinished", "CaptureService"),
+    ("OnCapturePermissionsPromptFinished", "CaptureService"),
+    ("DeleteCapture", "CaptureService"),
+    ("SaveCaptureToExternalStorage", "CaptureService"),
+    ("SaveScreenshotCapture", "CaptureService"),
+    ("StopVideoCaptureInternal", "CaptureService"),
+    ("GetMaxQualityLevel", "RenderSettings"),
     ("RegisterSetCore", "StarterGui"),
     ("RegisterGetCore", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -469,7 +534,13 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("GuiService", "GetNotificationTypeList")
         | ("MessageBusService" | "MessageBusConnection" | "LocalStorageService", _)
         | ("StarterGui", "RegisterSetCore" | "RegisterGetCore" | "SetCore" | "GetCore")
-        | ("RbxAnalyticsService" | "IXPService", _) => core_members::call(lua, owner, name, args),
+        | ("RbxAnalyticsService" | "IXPService" | "MemStorageService" | "MemStorageConnection" | "NotificationService" | "ThirdPartyUserService" | "AdService" | "AvatarChatService" | "AchievementService" | "EventIngestService", _)
+        | ("Animator", "GetPlayingAnimationTracksCoreScript")
+        | ("HttpService", "RequestInternal")
+        | ("HttpRequest", _)
+        | ("CaptureService", _)
+        | ("VRService", "IsVRAppBuild")
+        | ("InsertService", "LoadLocalAsset") => core_members::call(lua, owner, name, args),
         ("RunService" | "UserInputService" | "Player", _) if core_members::luau_member(lua, owner, name)? => {
             core_members::call(lua, owner, name, args)
         }
@@ -652,6 +723,8 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         }
 
         // ---------------------------------------------------- settings
+        // The highest Enum.QualityLevel (Level21 in the API dump).
+        ("RenderSettings", "GetMaxQualityLevel") => ok(Value::Integer(21)),
         ("UserSettings", "IsUserFeatureEnabled") => {
             let f = arg_str(args, 1, "string")?;
             Err(rt_err(format!("Flag {f} does not exist")))
@@ -1290,6 +1363,9 @@ pub fn prop_get(lua: &Lua, r: Ref, class: &str, key: &str) -> mlua::Result<Optio
                 None => Value::Nil,
             }
         }
+        // The client build's git hash (RobloxScriptSecurity): rustudio is no
+        // Roblox build (estimate: empty, as GetRobloxVersion).
+        "ClientGitHash" if class == "RunService" => s(lua, "")?,
         "SelectionThickness" if class == "Selection" => Value::Number(0.02f32 as f64),
         "FullPath" if class == "Logger" => {
             let p = state(lua)?.logger_paths.get(&r).cloned();

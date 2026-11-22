@@ -118,6 +118,61 @@ local ugs_values = {
     HasEverUsedVR = false,
     ChatVisible = true,
     PlayerHeight = 5,
+    -- The settings only the CoreScripts read and write (RobloxScriptSecurity
+    -- in the API dump), at a fresh install's values (estimates; transparency
+    -- 1 and Medium text are GuiService's documented defaults).
+    PreferredTransparency = 1,
+    -- (the per-axis sensitivities start at MouseSensitivity's 0.52: estimate)
+    MouseSensitivityFirstPerson = Vector2.new(0.52, 0.52),
+    MouseSensitivityThirdPerson = Vector2.new(0.52, 0.52),
+    PreferredTextSize = Enum.PreferredTextSize.Medium,
+    StudioPreferredTextSize = Enum.PreferredTextSize.Medium,
+    ReducedMotion = false,
+    ReadAloud = false,
+    BadgeVisible = true,
+    PlayerListVisible = true,
+    PlayerNamesEnabled = true,
+    PerformanceStatsVisible = false,
+    OnScreenProfilerEnabled = false,
+    MicroProfilerWebServerEnabled = false,
+    MicroProfilerWebServerIP = "",
+    MicroProfilerWebServerPort = 0,
+    StartMaximized = false,
+    StartScreenPosition = Vector2.zero,
+    StartScreenSize = Vector2.zero,
+    CameraMode = Enum.CustomCameraMode.Default,
+    PeoplePageLayout = Enum.PeoplePageLayout.Card,
+    UIScaleMultiplierHundredths = 100,
+    UiNavigationKeyBindEnabled = true,
+    GraphicsQualityLevel = 0,
+    GraphicsOptimizationMode = Enum.GraphicsOptimizationMode.Balanced,
+    MaxQualityEnabled = false,
+    QualityResetLevel = 0,
+    FramerateCap = 0,
+    HapticStrength = 1,
+    PartyVoiceVolume = 1,
+    VoiceChatVolume = 1,
+    MasterVolumeStudio = 1,
+    ChatTranslationEnabled = false,
+    ChatTranslationToggleEnabled = false,
+    ChatTranslationFTUXShown = false,
+    ChatTranslationLocale = "",
+    DefaultCameraID = "",
+    OnboardingsCompleted = "",
+    IsUsingCameraYInverted = false,
+    IsUsingGamepadCameraSensitivity = false,
+    AllTutorialsDisabled = false,
+    UsedCoreGuiIsVisibleToggle = false,
+    UsedCustomGuiIsVisibleToggle = false,
+    UsedHideHudShortcut = false,
+    VREnabled = false,
+    VRComfortSetting = Enum.VRComfortSetting.Comfort,
+    VRSafetyBubbleMode = Enum.VRSafetyBubbleMode.NoOne,
+    VRRotationIntensity = 1,
+    VRSmoothRotationEnabledCustomOption = false,
+    VRThirdPersonFollowCamEnabled = false,
+    VRThirdPersonFollowCamEnabledCustomOption = false,
+    VignetteEnabledCustomOption = true,
 }
 -- Studio's are Instances: a
 -- UserSettings named "GlobalBasicSettings" holding the UserGameSettings;
@@ -1008,10 +1063,17 @@ function M.GetGuiInset()
 end
 function M.GetEmotesMenuOpen() return false end
 function M.GetInspectMenuEnabled() return false end
--- PlayerScripts: the camera / movement mode lists shown in the settings menu.
-for _, n in { "RegisterTouchCameraMovementMode", "RegisterComputerCameraMovementMode", "RegisterTouchMovementMode", "RegisterComputerMovementMode",
-    "ClearComputerCameraMovementModes", "ClearComputerMovementModes", "ClearTouchCameraMovementModes", "ClearTouchMovementModes" } do
-    M[n] = function() end
+-- PlayerScripts: the camera / movement mode lists the PlayerModule
+-- registers and the settings menu (a CoreScript) reads back with
+-- GetRegistered* (RobloxScriptSecurity). One list per kind per DataModel.
+local registered_modes = {}
+for _, kind in { "TouchCameraMovementMode", "ComputerCameraMovementMode", "TouchMovementMode", "ComputerMovementMode" } do
+    registered_modes[kind] = {}
+    M["Register" .. kind] = function(self, mode)
+        if not table.find(registered_modes[kind], mode) then table.insert(registered_modes[kind], mode) end
+    end
+    M["Clear" .. kind .. "s"] = function() table.clear(registered_modes[kind]) end
+    M["GetRegistered" .. kind .. "s"] = function() return table.clone(registered_modes[kind]) end
 end
 
 -------------------------------------------------------------------- Camera
