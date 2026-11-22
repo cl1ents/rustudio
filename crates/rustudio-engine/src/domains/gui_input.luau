@@ -110,7 +110,7 @@ end
 get["GuiService.PreferredTextSize"] = function() return Enum.PreferredTextSize.Medium end
 get["GuiService.PreferredTransparency"] = function() return 1 end
 get["GuiService.ReducedMotionEnabled"] = function() return false end
-get["GuiService.TopbarInset"] = function() return Rect.new(0, 0, 0, 0) end
+get["GuiService.TopbarInset"] = function() return gs_state.topbar_inset or Rect.new(0, 0, 0, 0) end
 get["GuiService.ViewportDisplaySize"] = function() return Enum.DisplaySize.Medium end
 
 methods["GuiService.AddSelectionParent"] = function(_, name, parent)
@@ -128,6 +128,57 @@ methods["GuiService.SetEmotesMenuOpen"] = function(_, open) gs_state.emotes_open
 LM.GetEmotesMenuOpen = function() return gs_state.emotes_open end
 methods["GuiService.SetInspectMenuEnabled"] = function(_, on) gs_state.inspect_enabled = on == true end
 LM.GetInspectMenuEnabled = function() return gs_state.inspect_enabled end
+-- What the CoreScripts tell the engine about their top bar and menus
+-- (RobloxScriptSecurity members of the API dump). SetTopbarInset sets the
+-- TopbarInset property games read; SetMenuIsOpen(open, name) keeps a set
+-- of open core menus behind MenuIsOpen / MenuOpened / MenuClosed.
+-- SetGlobalGuiInset is kept but layout keeps mech::GUI_TOP_INSET, the 58
+-- pixels the CoreScripts' own top bar asks for (TopBar Constants).
+methods["GuiService.SetTopbarInset"] = function(inst, r)
+    if typeof(r) ~= "Rect" then argerr(1, "SetTopbarInset", "Rect", r) end
+    if gs_state.topbar_inset ~= r then gs_state.topbar_inset = r changed(inst, "TopbarInset") end
+end
+methods["GuiService.SetGlobalGuiInset"] = function(_, x1, y1, x2, y2)
+    gs_state.global_inset = { x1, y1, x2, y2 }
+end
+gs_state.core_menus = {}
+methods["GuiService.SetMenuIsOpen"] = function(inst, open, name)
+    local was = next(gs_state.core_menus) ~= nil or gs_state.inspect_open or G.menu_open()
+    gs_state.core_menus[tostring(name)] = if open then true else nil
+    local now = next(gs_state.core_menus) ~= nil or gs_state.inspect_open or G.menu_open()
+    if now ~= was then fire(inst, if now then "MenuOpened" else "MenuClosed") changed(inst, "MenuIsOpen") end
+end
+-- A desktop client: no safe-area cut-outs, scale 1, the automatic UI
+-- scale at 100 % (estimates: what Studio's Windows client reports isn't
+-- measured here).
+methods["GuiService.GetResolutionScale"] = function() return 1 end
+methods["GuiService.GetRawScreenScale"] = function() return 1 end
+methods["GuiService.GetAutoUIScaleHundredths"] = function() return 100 end
+methods["GuiService.GetEffectiveUIScaleHundredths"] = function() return 100 end
+methods["GuiService.SetUIScaleMultiplier"] = function() end
+methods["GuiService.GetSafeZoneOffsets"] = function() return { top = 0, bottom = 0, left = 0, right = 0 } end
+methods["GuiService.GetGuiIsVisible"] = function() return true end
+-- No connection error and no UI message in a local Play.
+methods["GuiService.GetErrorMessage"] = function() return "" end
+methods["GuiService.GetUiMessage"] = function() return "" end
+methods["GuiService.GetErrorCode"] = function() return Enum.ConnectionError.OK end
+methods["GuiService.GetErrorType"] = function() return Enum.ConnectionError.OK end
+methods["GuiService.GetErrorDetails"] = function() return {} end
+methods["GuiService.ClearError"] = function() end
+-- To the app shell, which a Play session doesn't have.
+methods["GuiService.BroadcastNotification"] = function() end
+methods["GuiService.SetPurchasePromptIsShown"] = function() end
+-- Center dialogs: shown at once, hidden on removal (no queue: estimate).
+local center_dialogs = {}
+methods["GuiService.AddCenterDialog"] = function(_, dialog, _, show, hide)
+    center_dialogs[dialog] = hide
+    if type(show) == "function" then task.spawn(show) end
+end
+methods["GuiService.RemoveCenterDialog"] = function(_, dialog)
+    local hide = center_dialogs[dialog]
+    center_dialogs[dialog] = nil
+    if type(hide) == "function" then task.spawn(hide) end
+end
 -- The inspect menu (drawn by game_menu.rs). Studio opens it whatever
 -- SetInspectMenuEnabled says (that only hides the player list's button):
 -- MenuOpened and MenuIsOpen at the call, MenuClosed when it closes. It
@@ -206,7 +257,7 @@ methods["GuiService.InspectPlayerFromHumanoidDescription"] = function(_, desc, n
     open_inspect(function() return tostring(name) end, function() return desc end)
 end
 methods["GuiService.CloseInspectMenu"] = function() close_inspect() end
-get["GuiService.MenuIsOpen"] = function() return gs_state.inspect_open or G.menu_open() end
+get["GuiService.MenuIsOpen"] = function() return gs_state.inspect_open or G.menu_open() or next(gs_state.core_menus) ~= nil end
 local function step_inspect()
     if G.inspect_closed() then close_inspect() end
 end

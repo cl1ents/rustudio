@@ -771,7 +771,13 @@ impl Gui {
                 .filter(|sg| boolp(d, *sg, "ShowDevelopmentGui", true))
         };
         let mut layered: Vec<Ref> = Vec::new();
-        if let Some(pg) = screen_parent {
+        // With Roblox's CoreScripts on (core_scripts.rs) the client's CoreGui
+        // draws too, above every PlayerGui, as in a Roblox client.
+        let core_gui = (inp.playing && inp.roots == Roots::View && rustudio_core::rustudio_settings::core_scripts())
+            .then(|| d.find_child(root, "CoreGui"))
+            .flatten();
+        let parents = screen_parent.map(|p| (p, 1_000_000)).into_iter().chain(core_gui.map(|c| (c, 2_000_000)));
+        for (pg, order_base) in parents {
             for g in children(d, pg) {
                 let Some(class) = d.class_of(g) else { continue };
                 if !boolp(d, g, "Enabled", true) {
@@ -786,7 +792,7 @@ impl Gui {
                         roots.push(Root {
                             on_top: true,
                             light: 1.0,
-                            order: 1_000_000 + num(d, g, "DisplayOrder", 0.0) as i64,
+                            order: order_base + num(d, g, "DisplayOrder", 0.0) as i64,
                             dist: 0.0,
                             gui: g,
                             target: Target::Screen(Pos2::new(rect.left(), rect.top() + inset)),

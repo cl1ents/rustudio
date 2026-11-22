@@ -2,7 +2,9 @@
 //! Studio's data model patch): ScriptContext:AddCoreScriptLocal, the
 //! DataModel's fast-flag and engine-feature queries,
 //! UserInputService:GetPlatform, GuiService:GetNotificationTypeList, and
-//! MessageBusService / LocalStorageService (services_core.luau). Each is in
+//! MessageBusService / LocalStorageService and StarterGui's
+//! RegisterSetCore / RegisterGetCore behind SetCore / GetCore
+//! (services_core.luau). Each is in
 //! the API dump with RobloxScriptSecurity (or LocalUserSecurity: GetFast*,
 //! GetEngineFeature); the runtime's security check refuses game scripts
 //! before these run.
@@ -68,13 +70,39 @@ fn one(lua: &Lua, f: Fast) -> mlua::Result<MultiValue> {
     }]))
 }
 
+/// settings():GetFFlag / GetFVariable for a CoreScript: a flag it defined,
+/// else false / "" (estimate, as GetFast*).
+pub(super) fn settings_flag(lua: &Lua, method: &str, flag: &str) -> mlua::Result<MultiValue> {
+    let defined = super::state(lua)?.fast_flags.0.get(flag).cloned();
+    let v = match (method, defined) {
+        ("GetFFlag", Some(Fast::Flag(b))) => Fast::Flag(b),
+        ("GetFFlag", _) => Fast::Flag(false),
+        (_, Some(Fast::Flag(b))) => Fast::Str(b.to_string()),
+        (_, Some(Fast::Int(i))) => Fast::Str(i.to_string()),
+        (_, Some(Fast::Str(s))) => Fast::Str(s),
+        _ => Fast::Str(String::new()),
+    };
+    one(lua, v)
+}
+
+pub(super) fn luau_member(lua: &Lua, owner: &str, name: &str) -> mlua::Result<bool> {
+    let m: Table = lua.named_registry_value("svc_core_impl")?;
+    m.contains_key(format!("{owner}.{name}"))
+}
+
 pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlua::Result<MultiValue> {
     match name {
-        // services_core.luau
+        // services_core.luau: every member it defines.
+        _ if luau_member(lua, owner, name)? => {
+            let m: Table = lua.named_registry_value("svc_core_impl")?;
+            let f: Function = m.get(format!("{owner}.{name}"))?;
+            f.call(args.clone())
+        }
         "GetMessageId" | "GetProtocolMethodRequestMessageId" | "GetProtocolMethodResponseMessageId" | "Subscribe"
         | "SubscribeToProtocolMethodRequest" | "SubscribeToProtocolMethodResponse" | "Publish" | "GetLast" | "Call"
         | "PublishProtocolMethodRequest" | "PublishProtocolMethodResponse" | "SetRequestHandler" | "MakeRequest"
-        | "Disconnect" | "GetItem" | "SetItem" | "Flush" | "WhenLoaded" => {
+        | "Disconnect" | "GetItem" | "SetItem" | "Flush" | "WhenLoaded" | "RegisterSetCore" | "RegisterGetCore" | "SetCore"
+        | "GetCore" => {
             let m: Table = lua.named_registry_value("svc_core_impl")?;
             let f: Function = m.get(format!("{owner}.{name}"))?;
             f.call(args.clone())

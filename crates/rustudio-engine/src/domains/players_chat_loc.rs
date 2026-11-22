@@ -152,7 +152,9 @@ fn entries_from_lua(v: &Value) -> mlua::Result<Vec<Entry>> {
         let field = |name: &str| -> mlua::Result<String> {
             match row.raw_get::<Value>(name)? {
                 Value::String(s) => Ok(s.to_str()?.to_string()),
-                Value::Nil if name == "Example" || name == "Context" || name == "Key" => Ok(String::new()),
+                // (Source may be left out too: UIBlox's Translator sets
+                // key-only entries, which Roblox's clients take.)
+                Value::Nil if name == "Example" || name == "Context" || name == "Key" || name == "Source" => Ok(String::new()),
                 _ => Err(rt_err(format!(
                     "Entry at index {i} had invalid Key/Source/Context: Entry at index {i} \"{name}\" was not a string."
                 ))),

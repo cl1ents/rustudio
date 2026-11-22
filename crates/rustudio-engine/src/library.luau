@@ -772,8 +772,24 @@ local function action_matches(k, input)
 end
 local function bind(name, fn, touch, priority, ...)
     action_seq += 1
-    actions[name] = { fn = fn, inputs = { ... }, priority = priority, seq = action_seq, touch = touch }
+    actions[name] = { name = name, fn = fn, inputs = { ... }, priority = priority, seq = action_seq, touch = touch }
 end
+-- The CoreScripts' own actions (BindCoreAction, RobloxScriptSecurity): a
+-- stack of their own ahead of every game action, so the menu's Escape and
+-- the chat's "/" reach them first (estimate: Roblox documents only that core
+-- bindings exist). Kept under a key games can't name.
+local CORE = "\0core:"
+function M.BindCoreAction(self, name, fn, touch, ...)
+    bind(name, fn, touch, Enum.ContextActionPriority.Medium.Value, ...)
+    actions[CORE .. name], actions[name] = actions[name], nil
+    actions[CORE .. name].core = true
+end
+function M.BindCoreActionAtPriority(self, name, fn, touch, priority, ...)
+    bind(name, fn, touch, tonumber(priority) or Enum.ContextActionPriority.Medium.Value, ...)
+    actions[CORE .. name], actions[name] = actions[name], nil
+    actions[CORE .. name].core = true
+end
+function M.UnbindCoreAction(self, name) actions[CORE .. tostring(name)] = nil end
 function M.BindAction(self, name, fn, touch, ...)
     bind(name, fn, touch, Enum.ContextActionPriority.Medium.Value, ...)
 end
@@ -789,11 +805,21 @@ function M.GetBoundActionInfo(self, name)
 end
 function M.GetAllBoundActionInfo(self)
     local out = {}
-    for name in actions do out[name] = M.GetBoundActionInfo(self, name) end
+    for name, a in actions do
+        if not a.core then out[name] = M.GetBoundActionInfo(self, name) end
+    end
+    return out
+end
+function M.GetBoundCoreActionInfo(self, name) return M.GetBoundActionInfo(self, CORE .. tostring(name)) end
+function M.GetAllBoundCoreActionInfo(self)
+    local out = {}
+    for _, a in actions do
+        if a.core then out[a.name] = M.GetBoundActionInfo(self, CORE .. a.name) end
+    end
     return out
 end
 function M.GetButton() return nil end
-for _, n in { "SetTitle", "SetDescription", "SetImage", "SetPosition", "BindActivate", "UnbindActivate" } do
+for _, n in { "SetTitle", "SetDescription", "SetImage", "SetPosition", "BindActivate", "UnbindActivate", "BindCoreActivate", "UnbindCoreActivate" } do
     M[n] = function() end
 end
 
@@ -812,6 +838,7 @@ local function run_actions(input, state)
             end
         end
         table.sort(list, function(x, y)
+            if (x.a.core == true) ~= (y.a.core == true) then return x.a.core == true end
             if x.a.priority ~= y.a.priority then return x.a.priority > y.a.priority end
             return x.a.seq > y.a.seq
         end)
@@ -821,7 +848,7 @@ local function run_actions(input, state)
     local got, sunk = {}, false
     for _, e in list do
         if actions[e.name] == e.a then
-            local ok, r = pcall(e.a.fn, e.name, state, input)
+            local ok, r = pcall(e.a.fn, e.a.name, state, input)
             if not ok then
                 task.spawn(error, r, 0)
             end

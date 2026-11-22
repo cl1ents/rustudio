@@ -141,4 +141,131 @@ M["LocalStorageService.WhenLoaded"] = function(self, fn)
 	task.spawn(fn)
 end
 
+------------------------------------------------------------ StarterGui
+-- SetCore / GetCore run what the CoreScripts registered (RobloxScriptSecurity
+-- RegisterSetCore / RegisterGetCore). Once any is registered, an unknown
+-- name fails with Roblox's message ("SetCore: SendNotification has not been
+-- registered by the CoreScripts"); with no CoreScripts running they keep
+-- rustudio's old answers (nothing / nil).
+local set_core, get_core = {}, {}
+M["StarterGui.RegisterSetCore"] = function(self, name, fn)
+	if type(fn) ~= "function" then fail("Argument 2 missing or nil") end
+	set_core[str_arg(name, 1)] = fn
+end
+M["StarterGui.RegisterGetCore"] = function(self, name, fn)
+	if type(fn) ~= "function" then fail("Argument 2 missing or nil") end
+	get_core[str_arg(name, 1)] = fn
+end
+M["StarterGui.SetCore"] = function(self, name, ...)
+	local f = set_core[str_arg(name, 1)]
+	if f then
+		f(...)
+	elseif next(set_core) ~= nil then
+		fail(string.format("SetCore: %s has not been registered by the CoreScripts", name))
+	end
+end
+M["StarterGui.GetCore"] = function(self, name)
+	local f = get_core[str_arg(name, 1)]
+	if f then return f() end
+	if next(get_core) ~= nil then
+		fail(string.format("GetCore: %s has not been registered by the CoreScripts", name))
+	end
+	return nil
+end
+
+------------------------------------------------------------ RunService
+-- The client build the CoreScripts report in telemetry and version checks.
+-- rustudio is no Roblox build: empty strings (estimate), no Team Create
+-- viewer or team test, and the Roblox GUI focus kept as set.
+local gui_focused = false
+M["RunService.GetRobloxVersion"] = function() return "" end
+M["RunService.GetCoreScriptVersion"] = function() return "" end
+M["RunService.GetRobloxClientChannel"] = function() return "" end
+M["RunService.IsTeamCreateViewer"] = function() return false end
+M["RunService.IsTeamTest"] = function() return false end
+M["RunService.GetRobloxGuiFocused"] = function() return gui_focused end
+M["RunService.SetRobloxGuiFocused"] = function(self, on)
+	on = on == true
+	if on ~= gui_focused then
+		gui_focused = on
+		rs.fire(self, "RobloxGuiFocusedChanged", on)
+	end
+end
+
+------------------------------------------------------------ UserInputService
+-- A desktop at the top device level (estimate: rustudio runs on desktops).
+M["UserInputService.GetDeviceType"] = function() return Enum.DeviceType.Desktop end
+M["UserInputService.GetDeviceLevel"] = function() return Enum.DeviceLevel.High end
+
+------------------------------------------------------------ Player
+-- The block list the CoreScripts keep on the local player (the web block
+-- list isn't fetched: it starts empty, estimate), and friend status
+-- (no friends web call here: NotFriend, estimate).
+local blocked, block_ready = {}, false
+M["Player.GetBlockListInitialized"] = function() return block_ready end
+M["Player.SetBlockListInitialized"] = function(self)
+	block_ready = true
+	rs.fire(self, "BlockListChanged")
+end
+M["Player.AddToBlockList"] = function(self, ids)
+	if type(ids) ~= "table" then fail("Argument 1 missing or nil") end
+	for _, id in ids do blocked[tonumber(id)] = true end
+	rs.fire(self, "BlockListChanged")
+end
+M["Player.UpdatePlayerBlocked"] = function(self, id, on)
+	blocked[tonumber(id)] = if on then true else nil
+	rs.fire(self, "BlockListChanged")
+end
+M["Player.HasBlockedPlayer"] = function(self, id) return blocked[tonumber(id)] == true end
+M["Player.GetFriendStatus"] = function(self, other)
+	if other == self then return Enum.FriendStatus.Unknown end
+	return Enum.FriendStatus.NotFriend
+end
+M["Player.GetUnder13"] = function() return false end
+
+------------------------------------------------------------ RbxAnalyticsService
+-- Roblox's telemetry: a Play session has no analytics backend, so the
+-- reports go nowhere and the ids are empty (stubs, as for AnalyticsService).
+for _, n in { "AddGlobalPointsField", "AddGlobalPointsTag", "RemoveGlobalPointsField", "RemoveGlobalPointsTag",
+	"ReleaseRBXEventStream", "ReportCounter", "ReportInfluxSeries", "ReportStats", "ReportToDiagByCountryCode",
+	"SendEventDeferred", "SendEventImmediately", "SetRBXEvent", "SetRBXEventStream", "TrackEvent", "TrackEventWithArgs",
+	"UpdateHeartbeatObject" } do
+	M["RbxAnalyticsService." .. n] = function() end
+end
+for _, n in { "GetClientId", "GetSessionId", "GetPlaySessionId" } do
+	M["RbxAnalyticsService." .. n] = function() return "" end
+end
+
+------------------------------------------------------------ IXPService
+-- Roblox's experiment layers. No experiment backend in a Play session: every
+-- layer reads as loaded with no variables, so callers take their defaults
+-- (estimate; the real service fetches assignments for the user).
+local ixp_layers = { User = {}, Creator = {}, BrowserTracker = {} }
+for kind, layers in ixp_layers do
+	M["IXPService.Get" .. kind .. "LayerLoadingStatus"] = function() return Enum.IXPLoadingStatus.Initialized end
+	M["IXPService.Get" .. kind .. "LayerVariables"] = function(self, name) str_arg(name, 1) return {} end
+	M["IXPService.Get" .. kind .. "StatusForLayer"] = function(self, name)
+		str_arg(name, 1)
+		return Enum.IXPLoadingStatus.Initialized
+	end
+	M["IXPService.Log" .. kind .. "LayerExposure"] = function(self, name) str_arg(name, 1) end
+	if kind ~= "BrowserTracker" then
+		M["IXPService.Register" .. kind .. "Layers"] = function(self, list)
+			if type(list) == "table" then
+				for _, name in list do layers[tostring(name)] = true end
+			end
+		end
+		M["IXPService.GetRegistered" .. kind .. "LayersToStatus"] = function()
+			local out = {}
+			for name in layers do out[name] = Enum.IXPLoadingStatus.Initialized end
+			return out
+		end
+		M["IXPService.Initialize" .. kind .. "Layers"] = function(self)
+			rs.fire(self, "On" .. kind .. "LayerLoadingStatusChanged", Enum.IXPLoadingStatus.Initialized)
+		end
+		M["IXPService.Clear" .. kind .. "Layers"] = function() table.clear(layers) end
+	end
+end
+M["IXPService.LogFlagLinkedUserLayerExposure"] = function(self, name) str_arg(name, 1) end
+
 return M

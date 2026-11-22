@@ -77,6 +77,66 @@ pub const METHODS: &[(&str, &str)] = &[
     ("SetItem", "LocalStorageService"),
     ("Flush", "LocalStorageService"),
     ("WhenLoaded", "LocalStorageService"),
+    ("GetRobloxVersion", "RunService"),
+    ("GetCoreScriptVersion", "RunService"),
+    ("GetRobloxClientChannel", "RunService"),
+    ("IsTeamCreateViewer", "RunService"),
+    ("IsTeamTest", "RunService"),
+    ("GetRobloxGuiFocused", "RunService"),
+    ("SetRobloxGuiFocused", "RunService"),
+    ("GetDeviceType", "UserInputService"),
+    ("GetDeviceLevel", "UserInputService"),
+    ("GetBlockListInitialized", "Player"),
+    ("SetBlockListInitialized", "Player"),
+    ("AddToBlockList", "Player"),
+    ("UpdatePlayerBlocked", "Player"),
+    ("HasBlockedPlayer", "Player"),
+    ("GetFriendStatus", "Player"),
+    ("GetUnder13", "Player"),
+    ("AddGlobalPointsField", "RbxAnalyticsService"),
+    ("AddGlobalPointsTag", "RbxAnalyticsService"),
+    ("RemoveGlobalPointsField", "RbxAnalyticsService"),
+    ("RemoveGlobalPointsTag", "RbxAnalyticsService"),
+    ("ReleaseRBXEventStream", "RbxAnalyticsService"),
+    ("ReportCounter", "RbxAnalyticsService"),
+    ("ReportInfluxSeries", "RbxAnalyticsService"),
+    ("ReportStats", "RbxAnalyticsService"),
+    ("ReportToDiagByCountryCode", "RbxAnalyticsService"),
+    ("SendEventDeferred", "RbxAnalyticsService"),
+    ("SendEventImmediately", "RbxAnalyticsService"),
+    ("SetRBXEvent", "RbxAnalyticsService"),
+    ("SetRBXEventStream", "RbxAnalyticsService"),
+    ("TrackEvent", "RbxAnalyticsService"),
+    ("TrackEventWithArgs", "RbxAnalyticsService"),
+    ("UpdateHeartbeatObject", "RbxAnalyticsService"),
+    ("GetClientId", "RbxAnalyticsService"),
+    ("GetSessionId", "RbxAnalyticsService"),
+    ("GetPlaySessionId", "RbxAnalyticsService"),
+    ("GetUserLayerLoadingStatus", "IXPService"),
+    ("GetUserLayerVariables", "IXPService"),
+    ("GetUserStatusForLayer", "IXPService"),
+    ("LogUserLayerExposure", "IXPService"),
+    ("RegisterUserLayers", "IXPService"),
+    ("GetRegisteredUserLayersToStatus", "IXPService"),
+    ("InitializeUserLayers", "IXPService"),
+    ("ClearUserLayers", "IXPService"),
+    ("GetCreatorLayerLoadingStatus", "IXPService"),
+    ("GetCreatorLayerVariables", "IXPService"),
+    ("GetCreatorStatusForLayer", "IXPService"),
+    ("LogCreatorLayerExposure", "IXPService"),
+    ("RegisterCreatorLayers", "IXPService"),
+    ("GetRegisteredCreatorLayersToStatus", "IXPService"),
+    ("InitializeCreatorLayers", "IXPService"),
+    ("ClearCreatorLayers", "IXPService"),
+    ("GetBrowserTrackerLayerLoadingStatus", "IXPService"),
+    ("GetBrowserTrackerLayerVariables", "IXPService"),
+    ("GetBrowserTrackerStatusForLayer", "IXPService"),
+    ("LogBrowserTrackerLayerExposure", "IXPService"),
+    ("LogFlagLinkedUserLayerExposure", "IXPService"),
+    ("RegisterSetCore", "StarterGui"),
+    ("RegisterGetCore", "StarterGui"),
+    ("SetCore", "StarterGui"),
+    ("GetCore", "StarterGui"),
     ("BindToSimulation", "RunService"),
     ("BindToAnimation", "RunService"),
     ("GetPredictionStatus", "RunService"),
@@ -195,6 +255,11 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("MessageOut", "Logger"),
     // LocalStorageService:SetItem (services_core.luau).
     ("ItemWasSet", "LocalStorageService"),
+    ("RobloxGuiFocusedChanged", "RunService"),
+    ("BlockListChanged", "Player"),
+    ("FriendStatusChanged", "Player"),
+    ("OnUserLayerLoadingStatusChanged", "IXPService"),
+    ("OnCreatorLayerLoadingStatusChanged", "IXPService"),
     // Source links and SetValue (services `newindex`, services.luau).
     ("ReceiverConnected", "CustomEvent"),
     ("ReceiverDisconnected", "CustomEvent"),
@@ -223,6 +288,8 @@ pub const EVENTS: &[(&str, &str)] = &[
     // legacy gear-type settings never change, no MicroProfiler capture).
     ("FullscreenChanged", "UserGameSettings"),
     ("StudioModeChanged", "UserGameSettings"),
+    // (Nothing in a Play session toggles the performance stats overlay yet.)
+    ("PerformanceStatsVisibleChanged", "UserGameSettings"),
     ("ServerLifecycleChanged", "DataModel"),
     ("ServerRestartScheduled", "DataModel"),
     ("ServerLowMemoryWarning", "DataModel"),
@@ -400,7 +467,12 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("ScriptContext", "AddCoreScriptLocal")
         | ("UserInputService", "GetPlatform")
         | ("GuiService", "GetNotificationTypeList")
-        | ("MessageBusService" | "MessageBusConnection" | "LocalStorageService", _) => core_members::call(lua, owner, name, args),
+        | ("MessageBusService" | "MessageBusConnection" | "LocalStorageService", _)
+        | ("StarterGui", "RegisterSetCore" | "RegisterGetCore" | "SetCore" | "GetCore")
+        | ("RbxAnalyticsService" | "IXPService", _) => core_members::call(lua, owner, name, args),
+        ("RunService" | "UserInputService" | "Player", _) if core_members::luau_member(lua, owner, name)? => {
+            core_members::call(lua, owner, name, args)
+        }
 
         // ---------------------------------------------------- RunService
         ("RunService", "BindToSimulation" | "BindToAnimation") => lcall(lua, name, args.clone()),
@@ -605,6 +677,12 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         ("UserGameSettings", _) => nothing(),
         ("GlobalSettings", _) => {
             let f = arg_str(args, 1, "string")?;
+            // The CoreScripts read Roblox's served flags here; rustudio
+            // serves none, so they get what they defined (DefineFast*), else
+            // false / "" (services_core.rs). Game scripts keep Studio's error.
+            if crate::runtime::security::current(lua) == crate::runtime::security::CORE {
+                return core_members::settings_flag(lua, name, &f);
+            }
             Err(rt_err(format!("Flag {f} does not exist")))
         }
 
