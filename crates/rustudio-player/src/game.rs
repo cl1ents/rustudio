@@ -287,7 +287,11 @@ impl Game {
                     )
                 })
             });
-            if esc {
+            // With Roblox's CoreScripts running (core_scripts.rs) their own
+            // menu, hotbar and chat take the keys, Escape included; rustudio's
+            // stand-ins stay out of the way.
+            let core_ui = rustudio_core::rustudio_settings::core_scripts();
+            if esc && !core_ui {
                 self.toggle_game_menu();
             }
             // Presses this frame: a tap pressed and released within one frame
@@ -304,7 +308,7 @@ impl Game {
                             pressed: true,
                             repeat: false,
                             ..
-                        } if physical_key.unwrap_or(*key) != Key::Escape => {
+                        } if core_ui || physical_key.unwrap_or(*key) != Key::Escape => {
                             Some(physical_key.unwrap_or(*key))
                         }
                         _ => None,
@@ -316,7 +320,7 @@ impl Game {
                 // (A focused TextBox has them: game-processed, Enter included.)
                 let processed = self.gui.focus.is_some();
                 if let Some(s) = self.play.as_mut() {
-                    if !processed {
+                    if !processed && !core_ui {
                         s.game.hotbar_taps.extend(taps.iter().copied());
                     }
                     s.game.key_taps.extend(taps.into_iter().map(|k| (k, processed)));

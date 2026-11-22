@@ -4060,11 +4060,13 @@ fn load_core_scripts(cdoc: &mut Document) -> Result<(rustudio_core::core_scripts
     let path = rustudio_core::core_scripts::patch_path().ok_or_else(|| {
         format!("CoreScripts: no {} in the Studio install", rustudio_core::core_scripts::PATCH)
     })?;
+    // Roblox's live client flags pick the CoreScripts' UI (client_flags.rs).
+    let flags = rustudio_core::client_flags::load();
     let t0 = std::time::Instant::now();
     let patch = rustudio_core::core_scripts::read(&path).map_err(|e| format!("CoreScripts: {e}"))?;
     let installed = rustudio_core::core_scripts::install(cdoc, patch).map_err(|e| format!("CoreScripts: {e}"))?;
     let note = format!(
-        "CoreScripts: {} modules and {} CoreScripts from {} ({} ms)",
+        "CoreScripts: {} modules and {} CoreScripts from {} ({} ms); {flags}",
         installed.modules.len(),
         installed.scripts.len(),
         path.display(),
