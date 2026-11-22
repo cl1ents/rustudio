@@ -1577,6 +1577,19 @@ impl Physics {
     /// Full rebuild from the document.
     pub fn reconcile(&mut self, doc: &Document) {
         self.world = new_world(self.gravity);
+        // A new world numbers its bodies and colliders from (0, 0) again, so
+        // whatever is kept by handle belonged to the old one and starts over:
+        // the Studio solver's records (one-part mass records, boxes, sleep and
+        // level state, contacts), as `new` makes it, the characters' and the
+        // client link's. Kept, a character body built first in the new world
+        // took the old world's first loose part's one-part mass record: a 19.1
+        // character integrated as 1.68 under a Humanoid force sized for 19.1
+        // swung further every tick and was flung (test
+        // `character_in_a_rebuilt_world_stands_still`).
+        if let Some(sv) = self.studio.as_mut() {
+            **sv = crate::solver::StudioSolver::new(sv.path);
+        }
+        self.link.new_world();
         self.parts.clear();
         self.asms.clear();
         self.dyn_version += 1;
@@ -1593,8 +1606,7 @@ impl Physics {
         self.terrain_tris = 0;
         self.terrain = None;
         // The world is new: characters' bodies are built again by their owner.
-        self.hums.by_model.clear();
-        self.hums.of_part.clear();
+        self.hums.new_world();
         let Some(ws) = Self::workspace_of(doc) else {
             return;
         };
@@ -5402,6 +5414,115 @@ mod tests {
             run_hum(&doc, &mut p, &mut c, &mut yaw, Vec3::new(0.0, 0.0, -16.0), 1.5);
             assert_eq!(c.pos.y > 3.19 + h - 0.1, climbs, "step {h}: {:?}", c.pos);
         }
+    }
+
+    /// A rebuilt world (`reconcile`, on a sync that marks everything) hands out
+    /// body handles from (0, 0) again, and the Studio solver's records by handle
+    /// start over with it. Kept, the character's body, the first of its new
+    /// world, took the old world's first loose part's one-part mass record (the
+    /// solver integrated 1.68 where rapier and the Humanoid had 19.1), and the
+    /// Humanoid's force, sized for 19.1, swung it further every tick until it
+    /// fell through the floor. Here an R15 build (Massless limbs on a heavy
+    /// HumanoidRootPart) stands, with accessory Handles (Massless, CanCollide
+    /// false) joined after its body was built: its root stays put and upright.
+    #[test]
+    fn character_in_a_rebuilt_world_stands_still() {
+        use crate::humanoid::{Humanoid, StepIn};
+        if crate::solver::kind() == crate::solver::SolverKind::Rapier {
+            return;
+        }
+        let mut doc = Document::new_place();
+        let ws = doc.workspace().unwrap();
+        for name in ["SpawnLocation", "Baseplate"] {
+            if let Some(r) = doc.find_named(ws, name) {
+                doc.dom.destroy(r);
+            }
+        }
+        // The old world: one loose 2×1.2×1 part, body (0, 0), mass record 1.68.
+        let crate_part = doc.dom.insert(ws, part("Crate", Vec3::new(40.0, 20.0, 40.0), false).with_property("Size", Vector3::new(2.0, 1.2, 1.0)));
+        let mut p = Physics::new(&mut doc);
+        run(&mut p, &mut doc, 1);
+        doc.dom.destroy(crate_part);
+        doc.dom.insert(ws, part("Floor", Vec3::new(0.0, -1.0, 0.0), true).with_property("Size", Vector3::new(400.0, 2.0, 400.0)));
+        let sh = hum_shape_r15();
+        let full_hip = sh.root_size.y * 0.5 + sh.hip;
+        let model = doc.dom.insert(ws, InstanceBuilder::new("Model").with_name("Character"));
+        doc.dom.insert(model, InstanceBuilder::new("Humanoid"));
+        let at = |x: f32, y: f32| Vec3::new(x, y, 0.0);
+        // 2×2×1 at density 3.5: the whole character's 14.
+        let heavy = rbx_dom_weak::types::PhysicalProperties::Custom(rbx_dom_weak::types::CustomPhysicalProperties::new(3.5, 0.3, 0.5, 1.0, 1.0, 1.0));
+        let root = doc.dom.insert(
+            model,
+            part("HumanoidRootPart", at(0.0, full_hip), false).with_property("Size", Vector3::new(2.0, 2.0, 1.0)).with_property("CustomPhysicalProperties", heavy),
+        );
+        let limb = |name: &str, pos: Vec3, size: Vector3, collide: bool| {
+            part(name, pos, false).with_property("Size", size).with_property("Massless", true).with_property("CanCollide", collide)
+        };
+        for (name, pos, size, collide) in [
+            ("LowerTorso", at(0.0, full_hip - 0.8), Vector3::new(2.0, 0.4, 1.0), true),
+            ("UpperTorso", at(0.0, full_hip + 0.2), Vector3::new(2.0, 1.6, 1.0), true),
+            ("Head", at(0.0, full_hip + 1.6), Vector3::new(1.2, 1.2, 1.2), true),
+            ("LeftUpperLeg", at(-0.5, 1.0), Vector3::new(1.0, 2.0, 1.0), false),
+            ("RightUpperLeg", at(0.5, 1.0), Vector3::new(1.0, 2.0, 1.0), false),
+        ] {
+            doc.dom.insert(model, limb(name, pos, size, collide));
+        }
+        let parts_of = |doc: &Document| -> Vec<(Ref, Xform)> {
+            doc.dom
+                .descendants_of(model)
+                .filter(|i| doc::is_a(&i.class, "BasePart"))
+                .filter_map(|i| Some((i.referent(), xform_of(doc, i.referent())?)))
+                .collect()
+        };
+        // The character's parts are the Humanoid's; the world is rebuilt
+        // without the crate, so the character's body is its first.
+        p.skip.extend(parts_of(&doc).iter().map(|(r, _)| *r));
+        p.reconcile(&doc);
+        p.add_humanoid(&doc, model, root, &parts_of(&doc));
+        let root_at = xform_of(&doc, root).unwrap();
+        let mut hum = Humanoid::default();
+        let (mut worst_v, mut worst_w, mut lowest_up) = (0.0f32, 0.0f32, 1.0f32);
+        for frame in 0..180 {
+            if frame == 30 {
+                // The server's accessories arrive after the character was taken.
+                for (name, y) in [("Hat", full_hip + 2.4), ("Hair", full_hip + 1.8)] {
+                    let acc = doc.dom.insert(model, InstanceBuilder::new("Accessory").with_name(name));
+                    let handle = doc.dom.insert(acc, limb("Handle", at(0.0, y), Vector3::new(2.0, 1.0, 2.0), false));
+                    doc.mark_tree(acc);
+                    p.skip.insert(handle);
+                }
+                p.refresh_humanoid(&doc, model, root, &parts_of(&doc));
+            }
+            // Each part where the rig holds it, relative to the root (no animation).
+            let local: std::collections::HashMap<Ref, Xform> =
+                parts_of(&doc).into_iter().map(|(r, xf)| (r, Xform { pos: xf.pos - root_at.pos, rot: Mat3::IDENTITY })).collect();
+            p.set_humanoid_pose(model, &local, &local);
+            let (xf, _, _) = p.humanoid_root(model).unwrap();
+            let own: HashSet<Ref> = local.keys().copied().collect();
+            let floor = p.humanoid_floor(&doc, model, xf.pos, Quat::from_mat3(&xf.rot), &sh, true, &own);
+            hum.floor_target_y = floor.map_or(f32::INFINITY, |f| f.0.y + full_hip);
+            let step = StepIn {
+                floor: floor.map(|f| f.0),
+                full_hip,
+                cos_max_slope: 89f32.to_radians().cos(),
+                ladder: false,
+                jump_velocity: 50.0,
+                accel_scale: 1.0,
+                ceiling: false,
+            };
+            let ctl = hum_body::HumCtl { hum: hum.clone(), step, floor_part: floor.and_then(|f| f.1), hrp: root, last: Default::default(), level: 1, swim: None };
+            p.set_humanoid_ctl(model, Some(ctl));
+            p.sync(&mut doc);
+            p.step(&mut doc, DT);
+            hum = p.humanoid_ctl(model).unwrap().hum.clone();
+            let (xf, v, w) = p.humanoid_root(model).unwrap();
+            worst_v = worst_v.max(v.length());
+            worst_w = worst_w.max(w.length());
+            lowest_up = lowest_up.min(xf.rot.y_axis.y);
+        }
+        let (xf, _, _) = p.humanoid_root(model).unwrap();
+        assert!(worst_v < 1.0 && worst_w < 0.5 && lowest_up > 0.99, "standing: |v| up to {worst_v}, |ω| up to {worst_w}, up.y down to {lowest_up}");
+        assert!((xf.pos - root_at.pos).length() < 0.2, "stays where it stood: {:?} from {:?}", xf.pos, root_at.pos);
     }
 
     /// A Plane LinearVelocity's walk (Place A's pmove) goes up a ramp at exactly

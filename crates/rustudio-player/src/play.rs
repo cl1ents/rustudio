@@ -45,8 +45,9 @@ mod npc;
 /// The player's character (refs are server-side).
 pub struct Character {
     pub model: Ref,
-    /// Accessories the rig's attachments were last worked out for (unused:
-    /// the Npcs journal reader redoes them, play_npc.rs `npc_journal`).
+    /// How many instances the character model held when the rig's attached
+    /// parts were last worked out (play_humanoid.rs `ensure_hum_body`; MAX:
+    /// not yet).
     pub accessories_seen: usize,
     /// Humanoid.FloorMaterial as last written (Enum.Material value).
     pub floor_material: u32,
