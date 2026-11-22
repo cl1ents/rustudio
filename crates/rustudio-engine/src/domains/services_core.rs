@@ -452,4 +452,44 @@ mod tests {
         assert!(has("probe 1 false"), "{out:?}");
         assert!(has("probe-done false"), "{out:?}");
     }
+
+    /// GuiService:GetClosestDialogToPosition (MainBotChatScript2 asks every
+    /// Heartbeat) follows Dialogs added and destroyed after its first call,
+    /// and only the Workspace's.
+    #[test]
+    fn closest_dialog_follows_added_and_destroyed_dialogs() {
+        let out = run_core(
+            r#"
+            local gs = game:GetService("GuiService")
+            local function dialog(parent, x, name)
+                local p = Instance.new("Part")
+                p.Name = name
+                p.Anchored = true
+                p.Position = Vector3.new(x, 0, 0)
+                local d = Instance.new("Dialog")
+                d.ConversationDistance = 25
+                d.Parent = p
+                p.Parent = parent
+                return p
+            end
+            local function closest(x)
+                local d = gs:GetClosestDialogToPosition(Vector3.new(x, 0, 0))
+                return d and d.Parent.Name
+            end
+            dialog(workspace, 10, "Far")
+            dialog(game:GetService("ReplicatedStorage"), 1, "Stored")
+            print("first", closest(0))
+            local near = dialog(workspace, 2, "Near")
+            print("added", closest(0))
+            near:Destroy()
+            print("destroyed", closest(0))
+            print("beyond", closest(100))
+            "#,
+        );
+        let has = |s: &str| out.iter().any(|t| t.starts_with(s));
+        assert!(has("first Far"), "{out:?}");
+        assert!(has("added Near"), "{out:?}");
+        assert!(has("destroyed Far"), "{out:?}");
+        assert!(has("beyond nil"), "{out:?}");
+    }
 }

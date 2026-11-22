@@ -42,10 +42,9 @@ end
 local function argerr(n, fn, want, got)
     error(string.format("invalid argument #%d to '%s' (%s expected, got %s)", n, fn, want, typeof(got)), 0)
 end
-local function local_player()
-    local ok, p = pcall(function() return svc("Players").LocalPlayer end)
-    return ok and p or nil
-end
+-- Players.LocalPlayer (gui_input.rs local_player: read natively, as asked
+-- every frame).
+local local_player = G.local_player
 local KEY_NONE
 for _, k in Enum.KeyCode:GetEnumItems() do
     if k.Value == 0 then KEY_NONE = k break end
@@ -190,24 +189,24 @@ methods["GuiService.ToggleFullscreen"] = function() end
 -- PrimaryPart / Head) is within its ConversationDistance: the dialogs the
 -- CoreScripts' MainBotChatScript2 offers (the API reference's
 -- ConversationDistance). "Visible" also wants the speaker on screen.
+-- MainBotChatScript2 asks every Heartbeat: the Workspace's Dialogs come
+-- from one native walk (G.workspace_dialogs), not GetDescendants.
 local function closest_dialog(pos, visible)
     refresh_game()
     local ws = svc("Workspace")
     if typeof(pos) ~= "Vector3" or not ws then return nil end
     local cam = ws.CurrentCamera
     local best, best_d = nil, math.huge
-    for _, d in ws:GetDescendants() do
-        if d:IsA("Dialog") then
-            local p = d.Parent
-            local part = if p and p:IsA("BasePart") then p
-                elseif p and p:IsA("Model") then (p.PrimaryPart or p:FindFirstChild("Head"))
-                else nil
-            if part and part:IsA("BasePart") then
-                local dist = (part.Position - pos).Magnitude
-                local on_screen = not visible or (cam and select(2, cam:WorldToViewportPoint(part.Position)))
-                if dist <= d.ConversationDistance and dist < best_d and on_screen then
-                    best, best_d = d, dist
-                end
+    for _, d in G.workspace_dialogs() do
+        local p = d.Parent
+        local part = if p and p:IsA("BasePart") then p
+            elseif p and p:IsA("Model") then (p.PrimaryPart or p:FindFirstChild("Head"))
+            else nil
+        if part and part:IsA("BasePart") then
+            local dist = (part.Position - pos).Magnitude
+            local on_screen = not visible or (cam and select(2, cam:WorldToViewportPoint(part.Position)))
+            if dist <= d.ConversationDistance and dist < best_d and on_screen then
+                best, best_d = d, dist
             end
         end
     end
@@ -2689,59 +2688,42 @@ end
 
 ---------------------------------------------------------------------- step
 -- Drops tracked instances that were destroyed (no Parent read possible).
+local function parent_of(i) return i.Parent end
+local function gone(i) return not pcall(parent_of, i) end
+local drop_gone = G.drop_gone
 local style_swept_at = -math.huge
 local function prune()
-    for _, set_ in tracked do
-        for i in set_ do
-            if not pcall(function() return i.Parent end) then set_[i] = nil end
-        end
-    end
-    for i in shown_prompts do
-        if not pcall(function() return i.Parent end) then shown_prompts[i] = nil holds[i] = nil end
-    end
-    for d in dialog_set do
-        if not pcall(function() return d.Parent end) then dialog_set[d] = nil end
-    end
-    if hover_a and not pcall(function() return hover_a.Parent end) then hover_a = nil end
-    if press and not pcall(function() return press.a.Parent end) then press = nil end
-    if focused and not pcall(function() return focused.Parent end) then focused = nil G.set_focus(nil) end
-    if equipped_tool and not pcall(function() return equipped_tool.Parent end) then equipped_tool = nil end
-    for fx in playing_fx do
-        if not pcall(function() return fx.Parent end) then playing_fx[fx] = nil end
-    end
-    for pl in tweening do
-        if not pcall(function() return pl.Parent end) then tweening[pl] = nil end
-    end
+    for _, set_ in tracked do drop_gone(set_) end
+    drop_gone(shown_prompts, holds, dialog_set, playing_fx, tweening)
+    if hover_a and gone(hover_a) then hover_a = nil end
+    if press and gone(press.a) then press = nil end
+    if focused and gone(focused) then focused = nil G.set_focus(nil) end
+    if equipped_tool and gone(equipped_tool) then equipped_tool = nil end
     -- The style tables grow with the CoreScripts' UI (thousands of styled
     -- objects): swept twice a second, not every frame.
     local now = os.clock()
     if now - style_swept_at < 0.5 then return end
     style_swept_at = now
-    for inst in styled do
-        if not pcall(function() return inst.Parent end) then styled[inst] = nil style_targets[inst] = nil end
-    end
-    for _, t in { rule_props, rule_trans, sheet_derives, query_conds, pseudos } do
-        for inst in t do
-            if not pcall(function() return inst.Parent end) then t[inst] = nil end
-        end
-    end
+    drop_gone(styled, style_targets, rule_props, rule_trans, sheet_derives, query_conds, pseudos)
 end
 
+-- step_all's phases, in order; each one's time is bench section gi_<name>
+-- (gui_input.rs bench_phase, same order).
+local STEP_PHASES = {
+    prune, step_fx, step_inspect, start_tracking, step_focus, step_tools,
+    step_pages, step_drags, step_adorns, step_mouse, step_prompts, step_styles,
+}
+local CLIENT_FROM = 3 -- the phases from step_inspect on are a client's
+local bench_phase, clock = G.bench_phase, os.clock
 local function step_all(dt)
     refresh_game()
-    prune()
-    step_fx()
-    if not G.is_client() then return end
-    step_inspect()
-    start_tracking()
-    step_focus()
-    step_tools()
-    step_pages(dt)
-    step_drags()
-    step_adorns()
-    step_mouse()
-    step_prompts()
-    step_styles()
+    local client = G.is_client()
+    for i, phase in STEP_PHASES do
+        if i >= CLIENT_FROM and not client then return end
+        local t0 = clock()
+        phase(dt)
+        bench_phase(i - 1, (clock() - t0) * 1000)
+    end
 end
 
 -- The Play server's plugin widgets (plugin_host/widgets_ui.rs, GUI

@@ -129,9 +129,12 @@ pub enum Reader {
     /// The styled GUI trees and style sheets style rule matching read
     /// (crates/rustudio-engine/src/domains/gui_input.rs `style_changes`).
     Styles = 24,
+    /// The Workspace's Dialogs (crates/rustudio-engine/src/domains/gui_input.rs
+    /// `workspace_dialogs`, GuiService:GetClosestDialogToPosition).
+    Dialogs = 25,
 }
 
-const JOURNAL_READERS: usize = Reader::Styles as usize + 1;
+const JOURNAL_READERS: usize = Reader::Dialogs as usize + 1;
 
 /// What a reader gets back: everything changed (rebuild), or the new marks.
 pub enum Marks {

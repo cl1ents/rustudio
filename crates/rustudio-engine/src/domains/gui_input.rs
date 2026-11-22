@@ -652,6 +652,87 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
         "class_signals",
         lua.create_function(|lua, classes: Vec<String>| crate::runtime::class_signals(lua, classes))?,
     )?;
+    // bench_phase(i, ms): one phase of step_all (gui_input.luau STEP_PHASES)
+    // as bench section `gi_<phase>`, inside input_step_client.
+    g.set(
+        "bench_phase",
+        lua.create_function(|_, (i, ms): (usize, f64)| {
+            const NAMES: [&str; 12] = [
+                "gi_prune", "gi_fx", "gi_inspect", "gi_tracking", "gi_focus", "gi_tools", "gi_pages", "gi_drags",
+                "gi_adorns", "gi_mouse", "gi_prompts", "gi_styles",
+            ];
+            if let Some(name) = NAMES.get(i) {
+                rustudio_core::bench::add(name, ms, 1);
+            }
+            Ok(())
+        })?,
+    )?;
+    // drop_gone(t, …): removes from each table the entries keyed by an
+    // Instance that no longer exists (gui_input.luau prune), without a Lua
+    // call and pcall closure per key.
+    g.set(
+        "drop_gone",
+        lua.create_function(|lua, tables: mlua::Variadic<Table>| {
+            let mut dead = Vec::new();
+            for t in tables.iter() {
+                {
+                    let w = world(lua)?;
+                    let d = w.d();
+                    for pair in t.pairs::<Value, Value>() {
+                        let (k, _) = pair?;
+                        if opt_inst(&k).is_some_and(|r| d.dom.get_by_ref(r).is_none()) {
+                            dead.push(k);
+                        }
+                    }
+                }
+                for k in dead.drain(..) {
+                    t.raw_set(k, Value::Nil)?;
+                }
+            }
+            Ok(())
+        })?,
+    )?;
+    // workspace_dialogs(): the Workspace's Dialogs, for GuiService:
+    // GetClosestDialogToPosition (MainBotChatScript2 asks every Heartbeat),
+    // kept from the document's journal (DialogIndex): GetDescendants and an
+    // IsA per instance in Lua cost milliseconds a frame in a large Workspace.
+    g.set(
+        "workspace_dialogs",
+        lua.create_function(|lua, ()| {
+            let found = workspace_dialogs(lua)?;
+            let t = lua.create_table_with_capacity(found.len(), 0)?;
+            for r in found {
+                t.raw_push(inst_value(lua, r)?)?;
+            }
+            Ok(t)
+        })?,
+    )?;
+    // local_player(): Players.LocalPlayer, read here (step_tools asks every
+    // frame; svc("Players").LocalPlayer under pcall was about 1 ms of each
+    // frame). The Players kept in the tree, not a destroyed copy GetService
+    // can hand back.
+    g.set(
+        "local_player",
+        lua.create_function(|lua, ()| {
+            let lp = {
+                let w = world(lua)?;
+                let d = w.d();
+                d.dom.root().children().iter().copied().find_map(|p| {
+                    if !d.dom.get_by_ref(p).is_some_and(|i| i.class == "Players") {
+                        return None;
+                    }
+                    match d.prop(p, "LocalPlayer") {
+                        Some(Variant::Ref(lp)) if d.exists(lp) => Some(lp),
+                        _ => None,
+                    }
+                })
+            };
+            match lp {
+                Some(r) => inst_value(lua, r),
+                None => Ok(Value::Nil),
+            }
+        })?,
+    )?;
     g.set(
         "is_client",
         // (the edit DataModel's plugins see the edit viewport as a client
@@ -1349,6 +1430,52 @@ fn style_scope(lua: &Lua) -> mlua::AppDataRefMut<'_, StyleScope> {
         lua.set_app_data(StyleScope::default());
     }
     lua.app_data_mut::<StyleScope>().expect("style scope")
+}
+
+/// The Workspace's Dialogs (`workspace_dialogs`), kept from the document's
+/// journal: a Dialog added anywhere is picked up from its Tree mark, one
+/// that left the Workspace or stopped existing is dropped when read.
+#[derive(Default)]
+struct DialogIndex {
+    doc_id: u64,
+    list: Vec<Ref>,
+}
+
+fn workspace_dialogs(lua: &Lua) -> mlua::Result<Vec<Ref>> {
+    use rustudio_core::doc::{Mark, Marks, Reader};
+    if lua.app_data_ref::<DialogIndex>().is_none() {
+        lua.set_app_data(DialogIndex::default());
+    }
+    let mut w = world(lua)?;
+    let marks = w.dm().marks_for(Reader::Dialogs);
+    let d = w.d();
+    let mut ix = lua.app_data_mut::<DialogIndex>().ok_or_else(|| rt_err("dialog index missing"))?;
+    let ws = d.workspace();
+    let is_dialog = |r: Ref| d.dom.get_by_ref(r).is_some_and(|i| i.class == "Dialog");
+    match marks {
+        Marks::Some(m) if ix.doc_id == d.id => {
+            for mark in m {
+                let Mark::Tree(t) = mark else { continue };
+                if !d.exists(t) {
+                    continue;
+                }
+                for r in d.subtree(t) {
+                    if is_dialog(r) && !ix.list.contains(&r) {
+                        ix.list.push(r);
+                    }
+                }
+            }
+        }
+        _ => {
+            ix.doc_id = d.id;
+            ix.list = match ws {
+                Some(ws) => d.dom.descendants_of(ws).filter(|i| i.class == "Dialog").map(|i| i.referent()).collect(),
+                None => Vec::new(),
+            };
+        }
+    }
+    ix.list.retain(|r| is_dialog(*r) && ws.is_some_and(|ws| d.is_ancestor(ws, *r)));
+    Ok(ix.list.clone())
 }
 
 pub fn step(lua: &Lua, dt: f64) -> mlua::Result<()> {
