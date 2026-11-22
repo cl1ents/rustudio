@@ -2895,10 +2895,21 @@ mod tests {
         let mut store = AssetStore::default();
         let mut textures = TextureCache::default();
         let mut up = |_: &Rgba, _: Option<u32>| 7u32;
+        // Images decode on the workers: ask again until the result is in.
+        fn loaded(textures: &mut TextureCache, id: &str, dir: Option<&Path>, store: &mut AssetStore, up: &mut TextureUpload) -> bool {
+            for _ in 0..500 {
+                if textures.image(id, dir, store, up).is_some() {
+                    return true;
+                }
+                textures.poll_decoded();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            false
+        }
         // Edit: local files render (and land in the texture cache).
         for id in &locals {
             assert!(matches!(store.content(id, Some(&dir)), Fetch::Ready(b) if *b == bytes), "{id}");
-            assert!(textures.image(id, Some(&dir), &mut store, &mut up).is_some(), "{id}");
+            assert!(loaded(&mut textures, id, Some(&dir), &mut store, &mut up), "{id}");
         }
         // Play: neither a fresh load nor the cache gives them.
         store.scripts_running = true;
@@ -2911,7 +2922,7 @@ mod tests {
         let id = "rbxtemp://rustudio/test-play-content.png";
         register_generated(id, bytes.clone());
         let generated_ok = matches!(store.content(id, None), Fetch::Ready(b) if *b == bytes)
-            && textures.image(id, None, &mut store, &mut up).is_some();
+            && loaded(&mut textures, id, None, &mut store, &mut up);
         unregister_generated(id);
         assert!(generated_ok);
         for id in ["rbxassetid://12345", "rbxasset://textures/white.png", "http://www.roblox.com/asset/?id=5", "12345"] {
