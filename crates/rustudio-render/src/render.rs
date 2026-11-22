@@ -3933,13 +3933,19 @@ impl Renderer {
         mask: Option<(u32, u32, &[u8])>, surface: Option<(u32, u32, &[u8])>,
     ) -> u32 {
         let (sw, sh, sp) = surface.unwrap_or((1, 1, &[128, 128, 255, 0]));
+        // (a packed map made on an asset worker comes with its mip chain)
+        let chain: std::borrow::Cow<[u8]> = if sp.len() > (sw * sh * 4) as usize {
+            std::borrow::Cow::Borrowed(sp)
+        } else {
+            std::borrow::Cow::Owned(rustudio_core::texture::data_mip_chain(sw, sh, sp))
+        };
         let surface_view = device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
             label: Some("SurfaceAppearance normal roughness metalness"),
             size: wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
             mip_level_count: mip_levels(sw, sh), sample_count: 1,
             dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
-        }, wgpu::util::TextureDataOrder::LayerMajor, &data_mip_chain(sw, sh, sp))
+        }, wgpu::util::TextureDataOrder::LayerMajor, &chain)
             .create_view(&Default::default());
         let mask_view = mask.map(|(w, h, px)| {
             device
@@ -5426,7 +5432,8 @@ impl Renderer {
         drop(r_scope);
         let r_scope = rustudio_core::bench::scope("r_per_frame_cull");
         // Per-frame items: moving, new and see-through parts.
-        let mut dyn_opaque: Vec<((usize, usize), InstanceRaw)> = Vec::new();
+        // (with each instance's bounding radius: the sun cascades cull by it)
+        let mut dyn_opaque: Vec<((usize, usize), InstanceRaw, f32)> = Vec::new();
         let mut dyn_decal: Vec<((usize, usize), InstanceRaw)> = Vec::new();
         let mut blended: Vec<(f32, (usize, usize), InstanceRaw)> = Vec::new();
         // Decals / Textures on a solid (or invisible) host: part of the
@@ -5484,7 +5491,7 @@ impl Renderer {
                     b.add_sphere(d.xf.pos, rad);
                 };
                 match pass_of(d) {
-                    Some(Pass::Opaque) => dyn_opaque.push((draw_key(d), raw)),
+                    Some(Pass::Opaque) => dyn_opaque.push((draw_key(d), raw, rad)),
                     Some(Pass::Decal) => {
                         see_bound(&mut see_bounds);
                         dyn_decal.push((draw_key(d), raw))
@@ -5671,6 +5678,22 @@ impl Renderer {
             // Casters: static opaque cells that can reach the cascade's box
             // (trimmed like the view), plus this frame's moving opaque parts.
             let sp = frustum(cascade.caster_view_proj());
+            // This frame's moving casters that can reach the cascade's box
+            // (a skinned mesh's vertices can leave its box: kept). Each box
+            // holds only part of the view, cascade 0 the nearest studs, so
+            // a crowd of moving characters drew far more shadows than it cast.
+            let mut moving_ranges: Vec<((usize, usize), u32, u32)> = Vec::new();
+            for (i, (key, raw, rad)) in dyn_opaque.iter().enumerate() {
+                let (centre, rad) = raw_sphere(raw, *rad);
+                if !sphere_visible(&sp, centre, rad) && !self.meshes.get(key.0).is_some_and(|m| m.storage) {
+                    continue;
+                }
+                let at = i as u32;
+                match moving_ranges.last_mut() {
+                    Some(l) if l.0 == *key && l.2 == at => l.2 = at + 1,
+                    _ => moving_ranges.push((*key, at, at + 1)),
+                }
+            }
             let mut shadow_ranges: Vec<((usize, usize), u32, u32)> = Vec::new();
             // Small casters are trimmed by their distance from the camera. At
             // Shading detail Low, cascades 1..3 measure it from their own
@@ -5790,7 +5813,7 @@ impl Renderer {
                     }
                 }
                 pass.set_vertex_buffer(1, self.instance_buf.slice(..));
-                for r in &opaque_runs {
+                for r in &moving_ranges {
                     cast(pass, r.0, r.1..r.2);
                 }
                 terrain(pass, false);
@@ -7899,34 +7922,12 @@ fn mip_levels(w: u32, h: u32) -> u32 {
     32 - w.max(h).leading_zeros()
 }
 
-/// An RGBA8 sRGB image followed by its mip levels (each half the size,
-/// 2×2 texels averaged in linear light; alpha averaged as is).
-/// PBR maps contain linear data; gamma-correct colour mips distort normals
-/// and roughness. Keep the channels in their encoded data space.
-fn data_mip_chain(mut w: u32, mut h: u32, rgba: &[u8]) -> Vec<u8> {
-    let mut out = rgba.to_vec();
-    let mut prev = rgba.to_vec();
-    while w > 1 || h > 1 {
-        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        let mut next = vec![0; (nw * nh * 4) as usize];
-        for y in 0..nh { for x in 0..nw { for c in 0..4 {
-            let mut sum = 0u16;
-            for (dx, dy) in [(0,0), (1,0), (0,1), (1,1)] {
-                sum += prev[(((y*2+dy).min(h-1)*w + (x*2+dx).min(w-1))*4) as usize + c] as u16;
-            }
-            next[((y*nw+x)*4) as usize+c] = ((sum+2)/4) as u8;
-        }}}
-        out.extend_from_slice(&next);
-        prev = next;
-        w = nw; h = nh;
-    }
-    out
-}
-
+/// PBR maps hold linear data: their mips average the stored values (a
+/// gamma-correct colour mip would distort normals and roughness).
 #[test]
 fn pbr_mips_preserve_linear_channels() {
     let px = [0,0,0,0, 255,255,255,255, 0,0,0,0, 255,255,255,255];
-    assert_eq!(&data_mip_chain(2,2,&px)[16..], &[128;4]);
+    assert_eq!(&rustudio_core::texture::data_mip_chain(2,2,&px)[16..], &[128;4]);
 }
 
 /// Six square faces, each with its mip chain, layer-major (a cube upload).

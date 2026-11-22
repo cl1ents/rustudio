@@ -345,6 +345,10 @@ now sit where Place A puts them (Attachment.WorldCFrame was missing).
 | Script budget | each side resumes waiting scripts for at most 6 ms per frame; the rest resume next frame; a single resume over 3 s errors with the script and line | estimated |
 | Replication | physics movement is copied without Changed events (as in Roblox); property ops are de-duplicated per frame; removals walk only the removed subtree | Roblox docs (Changed doesn't fire for physics); rest estimated |
 | Self-test perf check | opens og.rbxl (or RUSTUDIO_PERF_PLACE), Play for 10 s after a 3 s warm-up, records average and 1% low; passes at ≥ 60 fps average | person's request |
+| Asset work | texture decodes (all sizes), mesh parses, skinned mesh bases and clothing / SurfaceAppearance composites run on worker threads (`asset-work-N`: half the cores, 1 to 4); the viewport only uploads finished results. A part waiting on its mesh is not drawn; one waiting on a composite is drawn without it | Roblox decodes and parses on `TaskScheduler::submitAsyncTask` tasks and uploads on the render thread (Studio's code: `MeshManager2::onMeshContentReceived`, `TextureManager2::processPendingImages`); Roblox composites clothing on the GPU, here it stays the CPU composite |
+| Mesh upload budget | 8 MB of parsed mesh data or 3 ms per frame; the rest uploads next frame (textures keep 6 ms / 16 MB) | estimated (Roblox's render thread: 128 MiB / 500 ms per call, `DFInt::RenderMeshBulkUpload*`; textures 4 ms, `FInt::RenderTextureProcessingBudgetMilliseconds`) |
+| Moves | a part's CFrame change is a transform write; it re-reads only the parts skinned to it or wearing garments fitted over it. Physics / replication state (NetworkIsSleeping, Velocity, CanCollide, …) re-reads nothing | measured: a count of re-read reasons; before, every clothed R15 body part was re-read whenever a sibling moved |
+| Sun shadow casters | moving parts are culled to each cascade's caster box | estimated (no visible change) |
 
 ## Shapes and meshes on parts
 

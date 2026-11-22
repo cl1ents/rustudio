@@ -31,6 +31,7 @@ pub mod studio_content;
 pub mod paths;
 pub mod platform;
 pub mod assets;
+pub mod asset_work;
 pub mod bench;
 pub mod profiler;
 pub mod collision_groups;

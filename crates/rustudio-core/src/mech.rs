@@ -985,6 +985,11 @@ pub const GRASS_NEAR_SAMPLE_POINTS: [[f32; 2]; 32] = [
 /// a row is docked back into the main window (app.rs panel_windows).
 pub const PANEL_WINDOW_MAX_FAILS: u32 = 30;
 
+// Asset work off the render path (crates/rustudio-core/src/asset_work.rs, assets.rs MeshCache).
+pub const ASSET_WORK_THREADS: usize = 4; // most asset worker threads (half the cores, at least one; estimated)
+pub const MESH_UPLOAD_BUDGET_BYTES: usize = 8 << 20; // parsed mesh bytes uploaded per frame before the rest wait a frame (estimated: an R15 body part is ~0.1 MB; Roblox's render thread allows 128 MiB / 500 ms per call, DFInt::RenderMeshBulkUpload*, but there it doesn't stall the frame's gameplay)
+pub const MESH_UPLOAD_BUDGET_MS: f32 = 3.0; // mesh upload time per frame before the rest wait a frame (estimated; textures keep their 6 ms, Roblox's FInt::RenderTextureProcessingBudgetMilliseconds is 4)
+
 // --------------------------------------------------- physical properties
 
 /// A part's PhysicalProperties: plain data, read by the physics simulation
