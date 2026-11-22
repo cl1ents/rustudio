@@ -2177,6 +2177,9 @@ impl Game {
             if std::env::var_os("RUSTUDIO_NO_GUI").is_none() && show_gui {
                 let _g = rustudio_core::bench::scope("gui_draw");
                 gui.sync_roots(doc);
+                if playing {
+                    gui.draw_messages(&ctx, &painter, assets, doc, rect);
+                }
                 gui.draw(
                     &ctx,
                     &painter,

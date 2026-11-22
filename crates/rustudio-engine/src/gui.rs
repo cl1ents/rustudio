@@ -37,6 +37,8 @@ mod fx;
 mod adorn;
 #[path = "gui_ligatures.rs"]
 mod ligatures;
+#[path = "gui_message.rs"]
+mod message;
 #[path = "gui_color_glyphs.rs"]
 mod color_glyphs;
 
@@ -392,6 +394,8 @@ pub struct Gui {
     cache_why: HashMap<Ref, String>,
     /// ViewportFrames the current walk drew.
     walk_vfs: Vec<Ref>,
+    /// Legacy Messages / Hints in view (gui_message.rs).
+    messages: message::LegacyMessages,
 }
 
 /// Everything a draw needs from the editor.

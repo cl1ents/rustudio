@@ -419,6 +419,7 @@ now sit where Place A puts them (Attachment.WorldCFrame was missing).
 | Selection | GuiService.SelectedObject gets a 2 px outline; arrow keys move it to NextSelectionUp/Down/Left/Right or the nearest Selectable button / TextBox that way; Enter activates it | Roblox docs; outline colour estimated |
 | While editing | clicking a GUI object in the view selects it in the Explorer, as Studio does | Roblox Studio |
 | AbsolutePosition / AbsoluteSize / AbsoluteRotation | where the object was drawn last frame (before that: from its UDim2s) | Roblox docs |
+| Message / Hint (legacy) | while playing, one in the Workspace (any depth) or the LocalPlayer's PlayerGui shows: a Message with Text covers the whole view (top bar included) in grey 0.5 at alpha 0.5 with its text centred, Legacy 14, white with a black 1 px stroke; an empty Message draws nothing. A Hint draws an opaque black bar 20 px tall across the top, even when empty, its text centred in it, white, no stroke. Both under the game's GUIs | Studio 0.747 `Message::render2d` / `renderFullScreen` and `Hint::render2d` (constants read from the binary); the Roblox client's own screenshot (a black sky reads 64,64,64 under a Message, text 95 px wide for "Hello world!", rustudio 94) |
 | Cost | Place A's lobby (17 GUIs, several thousand objects) takes ~2.6 ms a frame | measured (`--bench`, load average ~10) |
 
 ## FBX models (InsertService:LoadAsset)
