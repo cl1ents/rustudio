@@ -310,40 +310,52 @@ camera 75 → 100 with the 2° tolerance unchanged.
 `RUSTUDIO_CORE_SCRIPTS=1` (or Studio Settings > rustudio > Play > Roblox's
 CoreScripts) makes Play put Studio's `DataModelPatch.rbxm` in the client
 (crates/rustudio-core/src/core_scripts.rs) and start its `StarterScript` at
-the CoreScript identity (4). Measured on the control place with Studio
-version-8d7a1009c17e4ff8's patch: 49190 modules and 79 CoreScripts in place
-in about 350 ms; StarterScript runs, adds
-`CoreScripts/CoreScriptErrorReporter`, and requires its way through Roact,
-the Scheduler, CachedPolicyService and the Flags modules. Closed on the way
-(all RobloxScriptSecurity in the API dump, domains/services_core.rs):
-ScriptContext:AddCoreScriptLocal, DataModel:DefineFast{Flag,Int,String} /
-GetFast* / GetEngineFeature / SetFlagVersion / GetPlaySessionId,
-UserInputService:GetPlatform, GuiService:GetNotificationTypeList,
-MessageBusService (publish / subscribe, protocol requests) and
-LocalStorageService / AppStorageService (session-only items).
+the CoreScript identity (4). On the control place (Studio
+version-8d7a1009c17e4ff8's patch: 49190 modules, 79 CoreScripts, about
+350 ms to load) StarterScript now runs to its end with no CoreScript error
+in Output: Roblox's top bar draws (Roblox menu, chat and "more" buttons in
+the Builder Icons font) and so does the player list; rustudio's own menu,
+chat, hotbar and emote wheel stay hidden while it's on.
 
-First blocker now: `GetResolutionScale is not a valid member of GuiService`
-(StarterScript line 30's requires stop there, so no top bar, chat or menu is
-drawn yet; the game itself plays on). Flag values are the CoreScripts' own
-defaults and every engine feature reads false (estimates: rustudio has no
-served flag settings).
+Closed on the way (API dump members; stubs only where a Play session has no
+backend, each noted in the code):
 
-Still missing, by a static pass over the patch's bytecode string constants
-against the API dump and rustudio's sources (candidates, not each confirmed
-by a run): GuiService (GetResolutionScale, GetSafeZoneOffsets,
-SetTopbarInset, SetGlobalGuiInset, SetMenuIsOpen, BroadcastNotification,
-GetErrorMessage / GetErrorCode, AddCenterDialog, CoreGuiFolder…),
-StarterGui:RegisterSetCore / RegisterGetCore (every SetCore / GetCore the
-CoreScripts serve), ContextActionService:BindCoreActionAtPriority /
-GetAllBoundCoreActionInfo, RunService:GetRobloxVersion / GetCoreScriptVersion
-/ SetRobloxGuiFocused, TextChatService's chat-window members (ChatIsLoaded,
-GetTextChannelWindows, SendExpChat*, CoreMessageReceived,
-OnIncomingMessageEvent), Player block / friend members (GetFriendStatus,
-HasBlockedPlayer, BlockListChanged…), VRService (VRSessionState,
-IsVRAppBuild…), ExperienceService, RbxAnalyticsService (GetSessionId,
-ReportCounter…), UserGameSettings (ChatVisible, PlayerListVisible,
-UIScaleMultiplierHundredths…), CoreGui:TakeScreenshot, ScreenGui
-OnTopOfCoreBlur, GuiBase2d TotalGroupScale.
+- ScriptContext:AddCoreScriptLocal; DataModel DefineFast*/GetFast*/
+  GetEngineFeature/SetFlagVersion/GetPlaySessionId; settings() flags for
+  CoreScripts.
+- GuiService: SetTopbarInset/TopbarInset, SetMenuIsOpen, SetGlobalGuiInset,
+  GetResolutionScale and the UI-scale/safe-zone/hardware-viewport getters,
+  error getters, Add/RemoveCenterDialog, Add/Remove(Special)Key,
+  GetNotificationTypeList, SendCoreUiNotification (any API-dump callback is
+  now kept).
+- StarterGui:RegisterSetCore / RegisterGetCore behind SetCore / GetCore;
+  ContextActionService core actions (ahead of game actions).
+- MessageBusService, MemStorageService, LocalStorageService /
+  AppStorageService, IXPService (layers loaded, no variables),
+  HttpService:RequestInternal (roblox.com APIs through the login session).
+- RunService / UserInputService / Player / PlayerScripts / UserGameSettings /
+  RenderSettings / VRService / AvatarChatService / ThirdPartyUserService
+  members the CoreScripts read; HumanoidDescription.NumberEmotesLoaded;
+  InsertService:LoadLocalAsset; UDim2:lerp; LocalizationTable:SetEntries
+  without Source; analytics, ads, notifications, achievements and capture
+  gallery as stubs.
+- Rendering: CoreGui ScreenGuis (also inside Folders) draw above PlayerGui;
+  GSUB ligatures for icon fonts; rbxasset:// reaches Studio's ExtraContent.
+
+Live client flags (crates/rustudio-core/src/client_flags.rs): Play now
+loads Roblox's public PCDesktopClient settings (25 850 flags) and the
+CoreScripts take today's variants: the newer player list draws (with its
+close button), and the newer chat and top bar code runs. Those reach engine
+API the default-flag paths didn't, so with live flags the top bar fails to
+start again. First blockers, on a TextChatService place:
+`ExpChat.isUserChatEnabled:5` (a nil where a string is expected),
+AudioFocusService:GetFocusedContextId, SessionService:SessionExists and
+ExperienceService:RegisterForExperienceLeave. With the default flags (no
+kept copy, offline) the top bar draws as before. Clicking the chat button
+is not checked yet (the top bar's buttons are Foundation interactables, not
+GuiButtons). Engine features (GetEngineFeature) have no public source and
+read false.
+TextService:GetTextSizeOffsetAsync is still a stub.
 
 ## Next (open, by how much they block real games)
 

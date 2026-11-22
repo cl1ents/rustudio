@@ -419,4 +419,25 @@ for _, n in { "OnCaptureBegan", "OnCaptureEnded", "OnCaptureShared", "OnCaptureO
 	M["CaptureService." .. n] = function() end
 end
 
+------------------------------------------------------------ LinkingService
+-- Deep links into the app: a Play session gets none. The CoreScripts'
+-- registered url patterns are kept (IsUrlRegistered); nothing is pending
+-- and no url arrives (OnLuaUrl never fires).
+local lua_urls = {}
+M["LinkingService.RegisterLuaUrl"] = function(self, url) lua_urls[str_arg(url, 1)] = true end
+M["LinkingService.IsUrlRegistered"] = function(self, url) return lua_urls[str_arg(url, 1)] == true end
+M["LinkingService.GetLastLuaUrl"] = function() return nil end
+M["LinkingService.GetAndClearLastPendingUrl"] = function() return {} end
+M["LinkingService.StartLuaUrlDelivery"] = function() return nil end
+M["LinkingService.StopLuaUrlDelivery"] = function() end
+M["LinkingService.DetectUrl"] = function() end
+M["LinkingService.DetectDlic"] = function() end
+M["LinkingService.CreateInternalDlic"] = function() return nil end
+M["LinkingService.OpenUrl"] = function() return false end
+M["LinkingService.SupportsSwitchToSettingsApp"] = function() return false end
+M["LinkingService.SwitchToSettingsApp"] = function() end
+-- The user agent the client's web requests send: rustudio's own (its
+-- RequestInternal goes through rustudio's session).
+M["HttpService.GetUserAgent"] = function() return rs.user_agent end
+
 return M

@@ -9,10 +9,9 @@
 //! GetEngineFeature); the runtime's security check refuses game scripts
 //! before these run.
 //!
-//! Flag values: rustudio has none of Roblox's served flag settings, so a
-//! defined flag keeps the default its CoreScript gives (`DefineFastFlag(name,
-//! default)`), and a flag nothing defined reads false / 0 / "" (estimate:
-//! the engine's own C++ flags are unknown here). Engine features answer
+//! Flag values: Roblox's served client flags when Play loaded them
+//! (rustudio_core::client_flags), else the default a CoreScript gives
+//! (`DefineFastFlag(name, default)`), else false / 0 / "" (estimate). Engine features answer
 //! false: they gate engine API newer than what rustudio has, and the
 //! CoreScripts take their older path without them (estimate).
 
@@ -65,6 +64,7 @@ pub(super) fn install(lua: &Lua, rs: &Table) -> mlua::Result<()> {
             })
         })?,
     )?;
+    rs.set("user_agent", concat!("rustudio/", env!("CARGO_PKG_VERSION")))?;
     let m: Table = lua.load(include_str!("services_core.luau")).set_name("=rustudio.services.core").call(rs.clone())?;
     lua.set_named_registry_value("svc_core_impl", m)
 }
@@ -103,7 +103,17 @@ pub(super) fn settings_flag(lua: &Lua, method: &str, flag: &str) -> mlua::Result
     if flag == "InGameGlobalGuiInset" {
         return one(lua, Fast::Str((rustudio_core::mech::GUI_TOP_INSET as i64).to_string()));
     }
-    let defined = super::state(lua)?.fast_flags.0.get(flag).cloned();
+    let mut defined = super::state(lua)?.fast_flags.0.get(flag).cloned();
+    if defined.is_none() {
+        let place = place_id(lua)?;
+        if let Some(f) = rustudio_core::client_flags::current() {
+            use rustudio_core::client_flags::Kind;
+            defined = match method {
+                "GetFFlag" => f.flag(flag, place).map(Fast::Flag),
+                _ => [Kind::Str, Kind::Int, Kind::Flag].iter().find_map(|k| f.raw(*k, flag, place)).map(|s| Fast::Str(s.to_string())),
+            };
+        }
+    }
     let v = match (method, defined) {
         ("GetFFlag", Some(Fast::Flag(b))) => Fast::Flag(b),
         ("GetFFlag", _) => Fast::Flag(false),
@@ -113,6 +123,28 @@ pub(super) fn settings_flag(lua: &Lua, method: &str, flag: &str) -> mlua::Result
         _ => Fast::Str(String::new()),
     };
     one(lua, v)
+}
+
+/// The DataModel's PlaceId (a `_PlaceFilter` flag's test).
+fn place_id(lua: &Lua) -> mlua::Result<i64> {
+    let w = world(lua)?;
+    let d = w.d();
+    Ok(match d.prop(d.dom.root_ref(), "PlaceId") {
+        Some(rbx_dom_weak::types::Variant::Int64(i)) => i,
+        _ => 0,
+    })
+}
+
+/// Roblox's served value of fast flag `name`, of `like`'s kind
+/// (rustudio_core::client_flags, loaded when the CoreScripts start).
+fn live_flag(lua: &Lua, name: &str, like: &Fast) -> mlua::Result<Option<Fast>> {
+    let Some(f) = rustudio_core::client_flags::current() else { return Ok(None) };
+    let place = place_id(lua)?;
+    Ok(match like {
+        Fast::Flag(_) => f.flag(name, place).map(Fast::Flag),
+        Fast::Int(_) => f.int(name, place).map(Fast::Int),
+        Fast::Str(_) => f.string(name, place).map(Fast::Str),
+    })
 }
 
 pub(super) fn luau_member(lua: &Lua, owner: &str, name: &str) -> mlua::Result<bool> {
@@ -179,12 +211,23 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
                 ("DefineFastString", Value::String(s)) => Fast::Str(s.to_str()?.to_string()),
                 _ => return Err(rt_err(format!("{name}: Argument 2 missing or nil"))),
             };
-            let v = super::state(lua)?.fast_flags.0.entry(flag).or_insert(default).clone();
+            // Roblox's live value when it serves one (client_flags.rs).
+            let live = live_flag(lua, &flag, &default)?;
+            let v = super::state(lua)?.fast_flags.0.entry(flag).or_insert(live.unwrap_or(default)).clone();
             one(lua, v)
         }
         "GetFastFlag" | "GetFastInt" | "GetFastString" => {
             let flag = name_arg(args, name)?;
             let defined = super::state(lua)?.fast_flags.0.get(&flag).cloned();
+            let kind = match name {
+                "GetFastFlag" => Fast::Flag(false),
+                "GetFastInt" => Fast::Int(0),
+                _ => Fast::Str(String::new()),
+            };
+            let defined = match defined {
+                Some(v) => Some(v),
+                None => live_flag(lua, &flag, &kind)?,
+            };
             let v = match (name, defined) {
                 ("GetFastFlag", Some(v @ Fast::Flag(_)))
                 | ("GetFastInt", Some(v @ Fast::Int(_)))

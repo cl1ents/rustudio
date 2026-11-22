@@ -198,6 +198,19 @@ pub const METHODS: &[(&str, &str)] = &[
     ("SaveScreenshotCapture", "CaptureService"),
     ("StopVideoCaptureInternal", "CaptureService"),
     ("GetMaxQualityLevel", "RenderSettings"),
+    ("RegisterLuaUrl", "LinkingService"),
+    ("IsUrlRegistered", "LinkingService"),
+    ("GetLastLuaUrl", "LinkingService"),
+    ("GetAndClearLastPendingUrl", "LinkingService"),
+    ("StartLuaUrlDelivery", "LinkingService"),
+    ("StopLuaUrlDelivery", "LinkingService"),
+    ("DetectUrl", "LinkingService"),
+    ("DetectDlic", "LinkingService"),
+    ("CreateInternalDlic", "LinkingService"),
+    ("OpenUrl", "LinkingService"),
+    ("SupportsSwitchToSettingsApp", "LinkingService"),
+    ("SwitchToSettingsApp", "LinkingService"),
+    ("GetUserAgent", "HttpService"),
     ("RegisterSetCore", "StarterGui"),
     ("RegisterGetCore", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -536,7 +549,8 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("StarterGui", "RegisterSetCore" | "RegisterGetCore" | "SetCore" | "GetCore")
         | ("RbxAnalyticsService" | "IXPService" | "MemStorageService" | "MemStorageConnection" | "NotificationService" | "ThirdPartyUserService" | "AdService" | "AvatarChatService" | "AchievementService" | "EventIngestService", _)
         | ("Animator", "GetPlayingAnimationTracksCoreScript")
-        | ("HttpService", "RequestInternal")
+        | ("HttpService", "RequestInternal" | "GetUserAgent")
+        | ("LinkingService", _)
         | ("HttpRequest", _)
         | ("CaptureService", _)
         | ("VRService", "IsVRAppBuild")
