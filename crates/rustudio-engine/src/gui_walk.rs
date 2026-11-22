@@ -134,7 +134,8 @@ impl TextFitCache {
         self.spent[usize::from(self.screen)] += start.elapsed();
     }
 
-    fn probe(&mut self, ctx: &egui::Context, job: LayoutJob) -> Option<Arc<egui::Galley>> {
+    fn probe(&mut self, ctx: &egui::Context, mut job: LayoutJob) -> Option<Arc<egui::Galley>> {
+        sane_font_sizes(&mut job);
         let start = self.can_start_work().then(Instant::now)?;
         // TextScaled tries fractional sizes that never get painted. Keep
         // their glyphs away from the uploaded atlas and its world-GUI mips.
@@ -196,6 +197,7 @@ impl TextFitCache {
     fn layout(&mut self, ctx: &egui::Context, mut job: LayoutJob) -> Option<Arc<egui::Galley>> {
         // epaint normalizes the wrapping width before it stores the layout.
         job.wrap.max_width = job.wrap.max_width.round();
+        sane_font_sizes(&mut job);
         let key = text_job_hash(&job, ());
         if let Some(galley) = self.galleys.get(key).filter(|g| *g.job == job) {
             return Some(galley.clone());
@@ -2507,4 +2509,20 @@ mod layout_tests {
         out.textures_delta.clear();
     }
 
+}
+
+/// A TextSize of 0 (or a TextScaled label in a box with no height, or a NaN
+/// from a 0/0 scale) reaches here as a 0 or non-finite font size, which
+/// epaint's glyph cache rejects (debug assertion "Bad px_scale_factor: 0",
+/// a crash in gui_walk layout). Roblox draws such text as nothing; a tiny
+/// size draws nothing visible and keeps the layout's geometry (estimate).
+fn sane_font_sizes(job: &mut LayoutJob) {
+    for s in &mut job.sections {
+        let size = &mut s.format.font_id.size;
+        // (A tiny positive size, e.g. TextScaled in a box a hair tall,
+        // scales to a 0 px factor in epaint, which refuses it too.)
+        if !(size.is_finite() && *size >= rustudio_core::mech::GUI_MIN_FONT_SIZE) {
+            *size = rustudio_core::mech::GUI_MIN_FONT_SIZE;
+        }
+    }
 }
