@@ -1480,6 +1480,29 @@ local function pseudo_of(n, class)
 end
 local styled = {} -- inst → { prop → original value }
 local style_targets = {} -- inst → { prop → value } last applied
+local style_own = setmetatable({}, { __mode = "k" }) -- inst → { prop → true } set by the instance itself
+local style_seen = setmetatable({}, { __mode = "k" }) -- inst → { prop → { value read back after styling } }
+-- A class's default property values (a fresh instance of it, kept).
+local class_blank = {}
+local function class_default(inst, k)
+    local class = inst.ClassName
+    local blank = class_blank[class]
+    if blank == nil then
+        local ok, made = pcall(Instance.new, class)
+        blank = ok and made or false
+        class_blank[class] = blank
+    end
+    if not blank then return nil end
+    local ok, v = pcall(function() return blank[k] end)
+    return if ok then v else nil
+end
+local function differs(a, b)
+    if a == b then return false end
+    local ta = typeof(a)
+    if ta ~= typeof(b) or ta == "Instance" or ta == "table" then return true end
+    -- (value types compare by value: two equal Fonts / UDim2s)
+    return tostring(a) ~= tostring(b)
+end
 local function resolve_token(v, sheets)
     if type(v) == "string" and v:sub(1, 1) == "$" then
         local name = v:sub(2)
@@ -1610,22 +1633,50 @@ local function step_styles()
         end
     end
     -- Apply, remembering originals; restore what nothing sets any more.
+    -- A property the instance has set itself wins over every rule (Roblox's
+    -- styling guide, "Modified properties": a value set on the instance
+    -- overrides the styled one; Foundation's Icon sets FontFace and TextSize
+    -- over its "text-defaults" / "x-default-text-size" rules, so the icon
+    -- draws in Builder Icons at its size, not Builder Sans 8). Set means
+    -- not the class default when first styled, or changed since the style
+    -- wrote it.
     for inst, props in want do
         local orig = styled[inst] or {}
         styled[inst] = orig
         local last = style_targets[inst] or {}
         style_targets[inst] = last
+        local own = style_own[inst]
+        local seen = style_seen[inst] or {}
+        style_seen[inst] = seen
         for k, e in props do
-            if orig[k] == nil then
-                local ok, cur = pcall(function() return inst[k] end)
-                if ok then orig[k] = { cur } end
+            if own and own[k] then
+                continue
             end
-            if orig[k] and last[k] ~= e[1] then
+            local ok, cur = pcall(function() return inst[k] end)
+            if not ok then continue end
+            local set_here = if orig[k] == nil
+                then differs(cur, class_default(inst, k))
+                else not e[2] and seen[k] ~= nil and differs(cur, seen[k][1])
+            if set_here then
+                own = own or {}
+                style_own[inst] = own
+                own[k] = true
+                orig[k] = nil
+                last[k] = nil
+                seen[k] = nil
+                continue
+            end
+            if orig[k] == nil then orig[k] = { cur } end
+            if last[k] ~= e[1] then
                 last[k] = e[1]
                 if e[2] then
+                    seen[k] = nil
                     pcall(function() svc("TweenService"):Create(inst, e[2], { [k] = e[1] }):Play() end)
                 else
                     pcall(function() inst[k] = e[1] end)
+                    -- (as the property holds it: a Color3 kept in f32)
+                    local okr, now = pcall(function() return inst[k] end)
+                    seen[k] = if okr then { now } else nil
                 end
             end
         end

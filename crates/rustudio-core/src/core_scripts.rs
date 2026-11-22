@@ -229,11 +229,16 @@ pub fn install(doc: &mut Document, mut patch: Patch) -> Result<Installed, String
     };
     let core_gui = service(doc, "CoreGui");
     if named(&doc.dom, core_gui, "RobloxGui").is_none() {
+        // ZIndexBehavior Sibling: the settings menu's Leave / Respawn /
+        // Resume row (React-built at ZIndex 1 inside its ZIndex 2
+        // MenuContainer) draws over the menu's background in the real
+        // client; Global, Instance.new's default, drew it underneath.
         doc.dom.insert(
             core_gui,
             InstanceBuilder::new("ScreenGui")
                 .with_name("RobloxGui")
-                .with_property("ResetOnSpawn", false),
+                .with_property("ResetOnSpawn", false)
+                .with_property("ZIndexBehavior", Variant::Enum(rbx_dom_weak::types::Enum::from_u32(1))),
         );
     }
     let tops: Vec<Ref> = patch.dom.get_by_ref(instances).map(|i| i.children().to_vec()).unwrap_or_default();

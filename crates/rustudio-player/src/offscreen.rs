@@ -153,7 +153,7 @@ pub fn run<A: eframe::App>(
             v.monitor_size = Some(egui::vec2(size[0] as f32, size[1] as f32));
         }
         app.raw_input_hook(&ctx, &mut raw);
-        let out = ctx.run_ui(raw, |ui| {
+        let mut out = ctx.run_ui(raw, |ui| {
             draw(&mut app, ui);
             // RawInput defaults to a 2048 atlas offscreen. Keep its packing
             // for small scenes, but grow to the device limit when epaint
@@ -235,6 +235,9 @@ pub fn run<A: eframe::App>(
                 });
             }
         }
+        // (applied above, or nothing to apply them to: epaint's debug
+        // build asserts a dropped delta was handled)
+        out.textures_delta.clear();
         if close {
             app.on_exit();
             return 0;

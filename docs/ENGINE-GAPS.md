@@ -381,10 +381,33 @@ skips scripts and their children and reruns only when the tree, tags, the
 hovered / pressed objects, rules or the view change (and every 2 s);
 destroyed-instance sweeps run twice a second.
 
+Look (round 3, compared with the real client's captures):
+- Styles no longer override what an instance sets itself (Roblox's styling
+  guide, "Modified properties"): Foundation's icons keep their Builder Icons
+  FontFace and TextSize over the "text-defaults" / "x-default-text-size"
+  rules, so `microphone`, `arrow-medium-up` and the rest draw as glyphs
+  (they drew as Builder Sans 8 text).
+- RobloxGui is ZIndexBehavior Sibling: the settings menu's Leave / Respawn /
+  Resume row and the Help tab's grid draw over the menu's background, not
+  dimmed under it.
+- The default chat PrefixText is `<font color="#…">DisplayName:</font>` in
+  the team colour, else the CoreScripts' computeNameColor colour (ev1 green);
+  RobloxEmoji's colour glyphs (the verified badge U+E000) draw in their COLR
+  layers' colours (gui_color_glyphs.rs); rich text `color = "…"` with spaces
+  parses.
+- Text outlines: a run's own transparency fades its outline (ExpChat's
+  invisible copy of the name drew a black outline over it), and the eight
+  outline copies share the stroke's alpha (mech GUI_TEXT_STROKE_OVERLAP).
+- A row's flex-grown items that grow on Y are as tall as they are at their
+  new width (the chat input grew to 182 px while typing).
+
 Still open: the Respawn confirmation page draws its text tiny (its confirm
 button not yet verified); VoiceChatCore.CoreVoiceManager:680 indexes a nil
 service (AvatarChatService behind an engine feature, which reads false).
-TextService:GetTextSizeOffsetAsync is still a stub.
+TextService:GetTextSizeOffsetAsync is still a stub. The Help tab's key
+column wraps a character per line and the version footer overlaps itself;
+the Settings tab's section headers are not yet compared with Roblox's;
+`<stroke>` rich text tags are read but not drawn.
 
 ## Next (open, by how much they block real games)
 

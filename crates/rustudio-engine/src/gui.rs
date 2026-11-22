@@ -37,6 +37,8 @@ mod fx;
 mod adorn;
 #[path = "gui_ligatures.rs"]
 mod ligatures;
+#[path = "gui_color_glyphs.rs"]
+mod color_glyphs;
 
 /// Where a GuiObject ended up (the values scripts read as AbsolutePosition /
 /// AbsoluteSize / AbsoluteRotation), plus its text's size (TextBounds).
@@ -1184,10 +1186,17 @@ pub(crate) fn fallback_fonts() -> &'static [&'static [u8]] {
         scripts.sort();
         files.extend(scripts);
         files.extend(rustudio_core::platform::fallback_font_files().iter().map(std::path::PathBuf::from));
-        files
-            .iter()
-            .filter_map(|p| std::fs::read(p).ok())
-            .map(|b| &*Box::leak(b.into_boxed_slice()))
+        // RobloxEmoji's colour glyphs first (the verified badge), rebuilt
+        // with its layers mapped (gui_color_glyphs.rs).
+        color_glyphs::face()
+            .map(|f| f.bytes.as_slice())
+            .into_iter()
+            .chain(
+                files
+                    .iter()
+                    .filter_map(|p| std::fs::read(p).ok())
+                    .map(|b| &*Box::leak(b.into_boxed_slice())),
+            )
             .collect()
     })
 }
@@ -1294,6 +1303,7 @@ impl Gui {
         };
         let name = format!("rbx:{path}");
         ligatures::note_face(&name, &bytes);
+        color_glyphs::note_face(&name, &bytes);
         let family = FontFamily::Name(name.clone().into());
         ctx.add_font(egui::epaint::text::FontInsert::new(
             &name,
@@ -1742,9 +1752,19 @@ fn parse_color(s: &str) -> Option<[f32; 3]> {
     (v.len() == 3).then(|| [v[0] / 255.0, v[1] / 255.0, v[2] / 255.0])
 }
 
+/// A rich text tag's attribute value: `name="v"`, `name='v'` or `name=v`,
+/// spaces allowed around the `=` (`<font color = "rgb(0, 0, 0)">` colours
+/// in Roblox).
 fn attr(tag: &str, name: &str) -> Option<String> {
-    let i = tag.find(&format!("{name}="))?;
-    let rest = &tag[i + name.len() + 1..];
+    let mut from = 0;
+    let rest = loop {
+        let i = from + tag[from..].find(name)?;
+        let after = tag[i + name.len()..].trim_start();
+        if let Some(v) = after.strip_prefix('=') {
+            break v.trim_start();
+        }
+        from = i + name.len();
+    };
     let q = rest.chars().next()?;
     if q == '"' || q == '\'' {
         let end = rest[1..].find(q)?;
@@ -1890,6 +1910,24 @@ mod tests {
         assert!(runs[1].bold);
         assert_eq!(runs[3].color, Some([1.0, 0.0, 0.0]));
         assert_eq!(runs[3].size, Some(20.0));
+    }
+
+    /// `<font color = "rgb(…)">` (spaces around `=`) colours, as in Roblox;
+    /// ExpChat's invisible prefix copy keeps its transparency (its outline
+    /// fades with it).
+    #[test]
+    fn rich_text_colour_attributes() {
+        let runs = rich_runs("<font color = \"rgb(0, 255, 0)\">ev1:</font> hi");
+        assert_eq!(runs[0].color, Some([0.0, 1.0, 0.0]));
+        assert_eq!(runs[1].color, None);
+        let runs = rich_runs("<font color='#02b857'>ev1:</font>");
+        assert_eq!(runs[0].color, Some([2.0 / 255.0, 184.0 / 255.0, 87.0 / 255.0]));
+        let runs = rich_runs(
+            "<font transparency='1.0' size='18'><stroke transparency='1.0'>Roblox_User_777:</stroke></font> hello",
+        );
+        assert_eq!(runs[0].text, "Roblox_User_777:");
+        assert_eq!(runs[0].transparency, Some(1.0));
+        assert_eq!(runs[1].transparency, None);
     }
 
     #[test]
@@ -2077,6 +2115,7 @@ pub fn text_bounds_now(d: &Document, r: Ref, size: [f32; 2], ui_scale: f32) -> O
     let scaled = boolp(d, r, "TextScaled", false);
     let line_height = num(d, r, "LineHeight", 1.0);
     let tsc = child_of_class(d, r, "UITextSizeConstraint");
+    let text = ligatures::apply(&family, text);
     let layout = |ts: f32, wrap: bool| {
         let mut f = egui::TextFormat::simple(egui::FontId::new(ts * em, family.clone()), Color32::WHITE);
         f.line_height = Some(ts * line_height);
@@ -2140,6 +2179,7 @@ impl walk::AutoText for FaceText {
         }
         let font = font_of(d, r);
         let Some((ctx, family, em)) = text_face(&font) else { return egui::Vec2::ZERO };
+        let text = ligatures::apply(&family, text);
         let size = num(d, r, "TextSize", 14.0) * scale * legacy_text_scale(&font);
         let mut f = egui::TextFormat::simple(egui::FontId::new(size * em, family), Color32::WHITE);
         f.line_height = Some(size * num(d, r, "LineHeight", 1.0));

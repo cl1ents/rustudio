@@ -72,13 +72,13 @@ fn substitute(map: &HashMap<String, char>, text: &str) -> Option<String> {
     changed.then_some(out)
 }
 
-struct R<'a>(&'a [u8]);
+pub(super) struct R<'a>(pub(super) &'a [u8]);
 
 impl R<'_> {
-    fn u16(&self, at: usize) -> Option<u16> {
+    pub(super) fn u16(&self, at: usize) -> Option<u16> {
         Some(u16::from_be_bytes(self.0.get(at..at + 2)?.try_into().ok()?))
     }
-    fn u32(&self, at: usize) -> Option<u32> {
+    pub(super) fn u32(&self, at: usize) -> Option<u32> {
         Some(u32::from_be_bytes(self.0.get(at..at + 4)?.try_into().ok()?))
     }
 }
@@ -90,26 +90,29 @@ pub(super) fn ligatures(bytes: &[u8]) -> HashMap<String, char> {
     parse(bytes).unwrap_or_default()
 }
 
-fn parse(bytes: &[u8]) -> Option<HashMap<String, char>> {
+/// A table's (offset, length) in an sfnt.
+pub(super) fn table(bytes: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
     let f = R(bytes);
-    let tables = f.u16(4)? as usize;
-    let mut cmap_at = None;
-    let mut gsub_at = None;
-    for i in 0..tables {
+    for i in 0..f.u16(4)? as usize {
         let rec = 12 + 16 * i;
-        match bytes.get(rec..rec + 4)? {
-            b"cmap" => cmap_at = Some(f.u32(rec + 8)? as usize),
-            b"GSUB" => gsub_at = Some(f.u32(rec + 8)? as usize),
-            _ => {}
+        if bytes.get(rec..rec + 4)? == tag {
+            return Some((f.u32(rec + 8)? as usize, f.u32(rec + 12)? as usize));
         }
     }
-    let (cmap_at, gsub_at) = (cmap_at?, gsub_at?);
-    // glyph → its (first) codepoint
-    let mut chars: HashMap<u16, char> = HashMap::new();
+    None
+}
+
+/// Every codepoint → glyph mapping of a face's cmap (format 4 and 12
+/// subtables, each mapping as often as the subtables repeat it), glyph 0
+/// left out.
+pub(super) fn cmap(bytes: &[u8]) -> Option<Vec<(char, u16)>> {
+    let f = R(bytes);
+    let (cmap_at, _) = table(bytes, b"cmap")?;
+    let mut out = Vec::new();
     let mut put = |c: u32, g: u32| {
         if let (Some(ch), Ok(g)) = (char::from_u32(c), u16::try_from(g)) {
             if g != 0 {
-                chars.entry(g).or_insert(ch);
+                out.push((ch, g));
             }
         }
     };
@@ -148,6 +151,17 @@ fn parse(bytes: &[u8]) -> Option<HashMap<String, char>> {
             }
             _ => {}
         }
+    }
+    Some(out)
+}
+
+fn parse(bytes: &[u8]) -> Option<HashMap<String, char>> {
+    let f = R(bytes);
+    let (gsub_at, _) = table(bytes, b"GSUB")?;
+    // glyph → its (first) codepoint
+    let mut chars: HashMap<u16, char> = HashMap::new();
+    for (c, g) in cmap(bytes)? {
+        chars.entry(g).or_insert(c);
     }
     let coverage = |at: usize| -> Option<Vec<u16>> {
         let n = f.u16(at + 2)? as usize;

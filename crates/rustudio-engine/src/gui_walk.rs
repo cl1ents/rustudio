@@ -629,12 +629,17 @@ impl Walk<'_, '_> {
                     }).collect();
                     let sum: f32 = ratios.iter().sum();
                     if sum > 0.0 {
-                        for (s, r) in sizes.iter_mut().zip(&ratios) {
+                        for ((k, s), r) in order.iter().zip(sizes.iter_mut()).zip(&ratios) {
                             let add = room * r / sum;
                             if vertical {
                                 s.y += add;
                             } else {
                                 s.x += add;
+                                // (as tall as it is at its new width:
+                                // Sizer::flex_heights)
+                                if add > 0.0 && enum_u32(d.prop(*k, "AutomaticSize")).unwrap_or(0) & 2 != 0 {
+                                    s.y = Sizer { d, m: &mut *self }.height_at_width(*k, s.x, content, dn.scale, 0);
+                                }
                             }
                         }
                         total += room;
@@ -858,10 +863,19 @@ impl<M: AutoText> Sizer<'_, M> {
                 } else {
                     inner.width()
                 } + p[1] * scale;
+            let mut sizes: Vec<egui::Vec2> =
+                kids.iter().map(|k| self.auto_child_size(*k, inner, scale, auto, depth + 1)).collect();
+            // A row that isn't growing on X fills its width as `children`
+            // lays it out: the items that flex wider are as tall as they
+            // are at their new width.
+            if !vertical && auto & 1 == 0 && depth < 8 {
+                let used = sizes.iter().map(|s| s.x).sum::<f32>() + gap * kids.len().saturating_sub(1) as f32;
+                let fill = enum_u32(d.prop(lay, "HorizontalFlex")) == Some(1);
+                self.flex_heights(&kids, &mut sizes, inner, inner.width() - used, fill, scale, depth + 1);
+            }
             let mut along = 0.0f32;
             let mut across = 0.0f32;
-            for (i, k) in kids.iter().enumerate() {
-                let s = self.auto_child_size(*k, inner, scale, auto, depth + 1);
+            for (i, s) in sizes.iter().enumerate() {
                 along += if vertical { s.y } else { s.x } + if i > 0 { gap } else { 0.0 };
                 across = across.max(if vertical { s.x } else { s.y });
             }
@@ -954,6 +968,62 @@ impl<M: AutoText> Sizer<'_, M> {
             }
         }
         s
+    }
+
+    /// A horizontal row's items grown by `room` (UIFlexItem FlexMode Grow,
+    /// or every item when the layout's HorizontalFlex is Fill), and those
+    /// growing on Y made as tall as their content is at the new width (an
+    /// item sized 0 wide measured first at 0: ExpChat's TextContainer wrapped
+    /// the typed text a word per line, the chat input 182 px tall).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn flex_heights(
+        &mut self,
+        kids: &[Ref],
+        sizes: &mut [egui::Vec2],
+        parent: Rect,
+        room: f32,
+        fill: bool,
+        scale: f32,
+        depth: usize,
+    ) {
+        let d = self.d;
+        if !room.is_finite() || room <= 0.0 || kids.is_empty() {
+            return;
+        }
+        let ratios: Vec<f32> = kids
+            .iter()
+            .map(|k| match child_of_class(d, *k, "UIFlexItem") {
+                Some(item) => flex_grow(d, item),
+                None => if fill { 1.0 } else { 0.0 },
+            })
+            .collect();
+        let sum: f32 = ratios.iter().sum();
+        if sum <= 0.0 {
+            return;
+        }
+        for ((k, s), r) in kids.iter().zip(sizes.iter_mut()).zip(&ratios) {
+            if *r > 0.0 {
+                s.x += room * r / sum;
+                if enum_u32(d.prop(*k, "AutomaticSize")).unwrap_or(0) & 2 != 0 {
+                    s.y = self.height_at_width(*k, s.x, parent, scale, depth);
+                }
+            }
+        }
+    }
+
+    /// An AutomaticSize Y object's height when it is `width` wide.
+    pub(super) fn height_at_width(&mut self, r: Ref, width: f32, parent: Rect, scale: f32, depth: usize) -> f32 {
+        let d = self.d;
+        let s = udim2(d, r, "Size");
+        let base = s[2] * parent.height() + s[3] * scale;
+        let c = self.content_size_in(r, egui::vec2(width, base), scale, 2, depth, width);
+        let mut y = base.max(c.y);
+        if let Some(c) = child_of_class(d, r, "UISizeConstraint") {
+            let min = vec2(d, c, "MinSize", [0.0, 0.0]);
+            let max = vec2(d, c, "MaxSize", [f32::INFINITY, f32::INFINITY]);
+            y = y.clamp(min[1], max[1].max(min[1]));
+        }
+        y
     }
 
     /// A GuiObject's size from Size, AutomaticSize and its constraints (and UIScale).
@@ -1822,7 +1892,7 @@ impl Walk<'_, '_> {
                     // Faux bold: egui has no synthetic bold, so a little extra spacing.
                     f.extra_letter_spacing = rs * 0.04;
                 }
-                job.append(&run.text, 0.0, f);
+                super::color_glyphs::append(&mut job, &run.text, f);
             }
             job.wrap.max_width = if wrap || truncate {
                 rect.width().max(1.0)
@@ -1930,7 +2000,26 @@ impl Walk<'_, '_> {
             }
         }
         if let Some((th, c)) = outline {
-            let tinted = outline_grad.as_ref().map(|gl| recolor_galley(&galley, pos, |p, _| gl.tint(p, c)));
+            // Roblox strokes the outline once at its transparency; the eight
+            // copies here overlap, so each takes a share of the alpha.
+            let a = c.a() as f32 / 255.0;
+            let per = 1.0 - (1.0 - a).powf(1.0 / mech::GUI_TEXT_STROKE_OVERLAP);
+            let c = if a > 0.0 { c.gamma_multiply(per / a) } else { c };
+            // A rich text run's own transparency fades its outline too
+            // (ExpChat's message body holds the name again as an invisible
+            // run to make room for it: it drew a black outline of the name).
+            let fill_a = (1.0 - tt) * me.alpha;
+            let fades = rich && fill_a > 0.0 && runs.iter().any(|run| run.transparency.is_some());
+            let tinted = (outline_grad.is_some() || fades).then(|| {
+                recolor_galley(&galley, pos, |p, v| {
+                    let base = outline_grad.as_ref().map_or(c, |gl| gl.tint(p, c));
+                    if fades {
+                        base.gamma_multiply((v.a() as f32 / 255.0 / fill_a).min(1.0))
+                    } else {
+                        base
+                    }
+                })
+            });
             for k in 0..8 {
                 let a = std::f32::consts::TAU * k as f32 / 8.0;
                 let at = pos + egui::vec2(a.cos(), a.sin()) * th;
