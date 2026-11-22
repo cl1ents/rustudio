@@ -601,8 +601,10 @@ local function load_sequence(id)
             if state == false then return nil, true end
             if state == true then
                 -- Decoded natively (anim domain): Studio's Animator loads its
-                -- clips on either side, without InsertService.
-                local ok, model = pcall(__rs_anim_asset, n)
+                -- clips on either side, without InsertService. The decode
+                -- runs on a worker: nil, true until it is done.
+                local ok, model, decoding = pcall(__rs_anim_asset, n)
+                if ok and decoding then return nil, true end
                 if ok and model then
                     kfs = model:FindFirstChildWhichIsA("KeyframeSequence", true)
                         or model:FindFirstChildWhichIsA("CurveAnimation", true)

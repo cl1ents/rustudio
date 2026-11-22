@@ -172,8 +172,9 @@ impl PlayerApp {
             .or_else(|| self.run.tick_shots(game, &ctx, |_, _, _| {}));
         self.last_work_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
         crate::profiler_counters::sample(game);
-        if let Some(rs) = game.render_state.as_ref() {
-            // (after the frame's submits, which may still be on the render thread)
+        if let Some(rs) = game.render_state.as_ref().filter(|_| rustudio_render::gpu_timing::on()) {
+            // (after the frame's submits, which may still be on the render
+            // thread; a job only while GPU spans are timed)
             let (device, queue) = (rs.device.clone(), rs.queue.clone());
             rustudio_render::render_thread::run(move || rustudio_render::gpu_timing::end_frame(&device, &queue));
         }

@@ -2753,6 +2753,7 @@ fn set_parent_opts(lua: &Lua, r: Ref, new_parent: Ref, replicate: bool, stop_scr
         }
         let descendants: Vec<Ref> = w.d().dom.descendants_of(r).map(|i| i.referent()).collect();
         let snaps = if enters_ws {
+            let _s = rustudio_core::bench::scope("sp_weld_snaps");
             let (snaps, activated) = weld_snaps(w.d(), r);
             for (weld, rel) in activated {
                 set_weld_offset(w.dm(), weld, Some(rel));
@@ -2781,11 +2782,15 @@ fn set_parent_opts(lua: &Lua, r: Ref, new_parent: Ref, replicate: bool, stop_scr
         store_prop(lua, part, "CFrame", Variant::CFrame(xf.to_cframe()))?;
     }
     if enters_ws {
+        let _s = rustudio_core::bench::scope("sp_enter_pose");
         let mut w = world(lua)?;
         let moves = domains::world::part::entering_joint_moves(w.d(), &descendants);
         apply_assembly_pose(&mut w, moves);
     }
-    fire_parent_signals(lua, r, old, new_parent, descendants)?;
+    {
+        let _s = rustudio_core::bench::scope("sp_signals");
+        fire_parent_signals(lua, r, old, new_parent, descendants)?;
+    }
     // After the hierarchy signals (Studio: an AncestryChanged handler on the Tool still
     // reads CanCollide true; EquipTool has returned with it false): the queued
     // Immediate fires run first.
@@ -5954,6 +5959,7 @@ impl Runtime {
         g.set(
             "__rs_kfs_parts",
             lua.create_function(|lua, kfs: LInst| {
+                let _s = rustudio_core::bench::scope("anim_kfs_parts");
                 let enum_name = |v: Option<Variant>, e: &str, dflt: &str| match v {
                     Some(Variant::Enum(x)) => LEnumItem::from_value(e, x.to_u32())
                         .map(|i| i.name)

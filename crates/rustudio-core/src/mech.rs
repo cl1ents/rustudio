@@ -366,10 +366,13 @@ pub const PENDING_MAX: usize = 4096; // ...or as soon as this many are waiting
 pub const DYNAMIC_SETTLE_S: f32 = 5.0; // a per-frame part this long without changes rejoins the static batches
 pub const STATIC_REBUILD_MIN_S: f32 = 3.0; // static rebuilds (a full re-sort + upload) at most this often
 pub const DEPTH_BIAS_STEP: f32 = 4e-7; // per-part relative depth nudge (16 steps) against coplanar flicker
+pub const DRAW_SYNC_BUDGET_MS: f32 = 4.0; // the viewport resolves changed parts' draws (meshes, textures, clothing, decals, uploads) for at most this long a frame; the rest wait for the next (estimated: characters arriving with their meshes and clothing took tens of ms of one frame; a whole new scene is resolved at once)
+pub const ANIM_LOAD_BUDGET_MS: f64 = 4.0; // an Animator step loads (parses) new clips until this much is spent; tracks of the rest load next step, Length 0 meanwhile, as Roblox's clips load asynchronously (estimated: a character's dozen clips took hundreds of ms of one frame)
 pub const PHYSICS_SERIAL_MAX_AWAKE: usize = 512; // awake bodies up to which a world step runs on the stepping thread instead of rapier's rayon pool (fan-out costs more than it saves on small active sets). the NPC test place, 205 awake NPC bodies, release, load ~19: 2.5 ms of physics per frame on one thread against 4.6-7.7 ms on the pool
 pub const MAX_PHYSICS_STEPS: usize = 16; // 240 Hz world steps per frame at most = MAX_FRAME_DT × 240: Studio caps the game step at 1/15 s, slower frames slow the simulation instead of piling up
 pub const PHYSICS_LENGTH_UNIT: f32 = 5.0; // rapier length scale in studs (sleep thresholds, contact tolerances) (estimated)
 pub const MAX_FRAME_DT: f32 = 1.0 / 15.0; // Play's game step per frame at most (Studio 0.746: PreAnimation dt and DistributedGameTime stop at 0.0667 s however long the frame; waits keep wall time)
+pub const PLAY_INPUT_POSE_WAIT_MS: f32 = 6.0; // after input, the display waits at most this long for the gameplay step carrying its RenderStepped pose; a slower step shows the last frame and lands on the next one (estimated: a 60 Hz frame's 16.7 ms less the main thread's own work)
 pub const SCRIPT_FRAME_BUDGET_MS: f64 = 6.0; // per side: waiting scripts past this resume next frame (estimated)
 pub const BENCH_TURN_DEG_PER_S: f32 = 36.0; // edit-mode benchmark camera turn rate
 pub const BODY_MOVER_P_SCALE: f32 = 1.0; // legacy BodyMover P/D read as force (torque) per stud (radian) and per stud/s (rad/s) (estimated)

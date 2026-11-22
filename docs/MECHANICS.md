@@ -76,6 +76,7 @@
 | Camera | every client has Workspace.CurrentCamera (made when the place has none) | Roblox docs |
 | Output | every script line is tagged [Server] or [Client] while Play runs | person's request |
 | Explorer | Server / Client toggle at the top while Play runs; the viewport shows the side you pick | person's request |
+| Frame budgets (Play) | the viewport resolves changed parts' draws for at most 4 ms a frame, the rest the next frame (`DRAW_SYNC_BUDGET_MS`; a whole new scene at once); an Animator step parses new clips until 4 ms are spent, the other tracks load the next step with Length 0 meanwhile (`ANIM_LOAD_BUDGET_MS`), their assets decoded on the asset workers; after input the display waits at most 6 ms for the gameplay step carrying the RenderStepped pose, else shows the last frame (`PLAY_INPUT_POSE_WAIT_MS`) | Roblox loads clips asynchronously (Length 0 until loaded) and uploads textures under a 4 ms budget (`TextureManager2::processPendingImages`, asset_work.rs); the numbers are estimates |
 
 ## Character (Play)
 

@@ -618,6 +618,7 @@ impl Game {
             && changes.moved.is_empty()
             && changes.restyled.is_empty()
             && !regen
+            && self.draw_cache.deferred.is_empty()
         {
             return;
         }
@@ -694,11 +695,13 @@ impl Game {
                 }
             }
         }
-        let mut todo: Vec<Ref> = if changes.full {
-            scene.parts.iter().map(|p| p.r).collect()
+        // What the last frame's budget left goes first.
+        let mut todo: Vec<Ref> = std::mem::take(&mut draw_cache.deferred);
+        if changes.full {
+            todo.extend(scene.parts.iter().map(|p| p.r));
         } else {
-            changes.changed
-        };
+            todo.extend(changes.changed);
+        }
         todo.extend(restyle_full);
         if regen {
             // A part waiting only on textures is redone when one of them can
@@ -735,7 +738,22 @@ impl Game {
         todo.extend(drawers);
         let mut seen = std::collections::HashSet::new();
         todo.retain(|r| seen.insert(*r));
-        for r in todo {
+        // A whole new scene resolves at once; otherwise at most a budget's
+        // worth a frame (characters and their meshes, textures and
+        // clothing arriving together took tens of ms of one frame), the
+        // rest next frame, as Roblox streams such parts in.
+        // Runs on the simulated clock (--fixed-dt captures) resolve all.
+        let budget = (!changes.full && !rustudio_core::sim_clock::on())
+            .then(|| std::time::Duration::from_secs_f32(rustudio_core::mech::DRAW_SYNC_BUDGET_MS / 1000.0));
+        let started = std::time::Instant::now();
+        let mut todo = todo.into_iter();
+        while let Some(r) = todo.next() {
+            if budget.is_some_and(|b| started.elapsed() >= b) {
+                draw_cache.deferred.push(r);
+                draw_cache.deferred.extend(todo);
+                rustudio_core::bench::add("count: sd_deferred", draw_cache.deferred.len() as f64, 1);
+                break;
+            }
             let Some(sp) = scene.get(r) else { continue };
             renderer.set_layer(r, sp.layer);
             // Layered garments are drawn with the body parts they fit.
@@ -1033,6 +1051,7 @@ impl Game {
             let has_mesh = sp.mesh_asset.is_some() && d.custom_mesh.is_some();
             if let Some((name, shirt, pants)) = &sp.clothing {
                 if let Some(role) = clothing_role(name) {
+                    let _sc = rustudio_core::bench::scope("sd_clothing");
                     let box_mesh = *clothing_meshes.entry(name.clone()).or_insert_with(|| {
                         let (p, n, u) = template_box(&role);
                         renderer.add_mesh(&device, &p, &n, &u)
@@ -1192,6 +1211,7 @@ impl Game {
                 - scene::f32_of(self.doc.prop(sp.r, "LocalTransparencyModifier"))
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0);
+            let sd_decals = rustudio_core::bench::scope("sd_decals");
             for dec in &sp.decals {
                 if dec.base_surface && variant_maps.is_some() {
                     continue;
@@ -1439,6 +1459,7 @@ impl Game {
                     cast_shadow: false,
                 });
             }
+            drop(sd_decals);
             // Layered clothing fitted onto this body part (wrap.rs).
             let is_target = self.doc.dom.get_by_ref(r).is_some_and(|i| {
                 i.children()
@@ -1446,6 +1467,7 @@ impl Game {
                     .any(|c| self.doc.class_of(*c).is_some_and(|k| k == "WrapTarget"))
             });
             if is_target {
+                let _sw = rustudio_core::bench::scope("sd_wrap");
                 let model = self
                     .doc
                     .dom
@@ -1642,6 +1664,7 @@ impl Game {
             } else {
                 draw_cache.style.remove(&r);
             }
+            let _si = rustudio_core::bench::scope("sd_set_item");
             let mut all = Vec::with_capacity(1 + extra.len());
             all.push(d);
             all.extend(extra);
@@ -3150,6 +3173,9 @@ pub struct DrawCache {
     pub xf: std::collections::HashMap<Ref, Xform>,
     /// Parts with a mesh or texture still loading.
     pub waiting: std::collections::HashSet<Ref>,
+    /// Parts to resolve that the last frame's budget (`DRAW_SYNC_BUDGET_MS`)
+    /// left for the next one, oldest first.
+    deferred: Vec<Ref>,
     /// Per part: (loaded mesh, textured, decals, clothed) for the self-test.
     flags: std::collections::HashMap<Ref, [u32; 4]>,
     /// Parts drawn as one instance a restyle can patch: the factor from the

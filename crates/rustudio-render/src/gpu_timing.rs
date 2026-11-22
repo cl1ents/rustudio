@@ -33,7 +33,8 @@ pub(crate) fn set_automatic(enabled: bool) {
     AUTOMATIC.store(enabled, Ordering::Relaxed);
 }
 
-fn on() -> bool {
+/// Whether GPU spans are timed now (`end_frame` does nothing otherwise).
+pub fn on() -> bool {
     benchmark_enabled() || AUTOMATIC.load(Ordering::Relaxed) || rustudio_core::profiler::gpu_wanted()
 }
 
