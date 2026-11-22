@@ -3263,11 +3263,7 @@ impl UserData for LCatalogSearchParams {
                     },
                 }
             };
-            // (the prop is IncludeOffSaleItems; Studio's text says IncludeOffSale)
-            let get = |k: &str| {
-                let k = if k == "IncludeOffSale" { "IncludeOffSaleItems" } else { k };
-                this.props.iter().find(|(n, _)| *n == k).map(|(_, v)| text(v)).unwrap_or_default()
-            };
+            let get = |k: &str| this.props.iter().find(|(n, _)| *n == k).map(|(_, v)| text(v)).unwrap_or_default();
             let keys = [
                 "SearchKeyword", "CategoryFilter", "SortType", "SortAggregation", "SalesTypeFilter",
                 "CreatorName", "Limit", "CreatorType", "BundleTypes", "AssetTypes", "IncludeOffSale",
@@ -3313,7 +3309,9 @@ fn catalog_search_params(lua: &Lua) -> LResult<LCatalogSearchParams> {
             ("SalesTypeFilter", e("SalesTypeFilter", "All")?),
             ("BundleTypes", Value::Table(lua.create_table()?)),
             ("AssetTypes", Value::Table(lua.create_table()?)),
-            ("IncludeOffSaleItems", Value::Boolean(false)),
+            // (Roblox's name, create.roblox.com CatalogSearchParams; scripts
+            // set `params.IncludeOffSale = true`)
+            ("IncludeOffSale", Value::Boolean(false)),
             ("CreatorName", Value::String(lua.create_string("")?)),
             ("CreatorType", e("CreatorTypeFilter", "All")?),
             ("CreatorId", Value::Number(0.0)),
