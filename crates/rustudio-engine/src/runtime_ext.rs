@@ -1400,17 +1400,14 @@ fn query_parts(lua: &Lua) -> mlua::Result<std::rc::Rc<Vec<QPart>>> {
     }
     let mut w = world(lua)?;
     let d = w.dm();
-    let marks = d.marks_for(doc::Reader::Query);
     let mut c = lua
         .app_data_mut::<QueryCache>()
         .ok_or_else(|| rt_err("query cache missing"))?;
-    let marks = if c.doc_id != d.id {
-        doc::Marks::All
-    } else {
-        marks
-    };
-    match marks {
-        doc::Marks::All => {
+    // The marks since the last query, read where they lie in the journal
+    // (four rays a frame each copied every mark since the last one out).
+    let pos = if c.doc_id != d.id { None } else { d.reader_pos(doc::Reader::Query) };
+    match pos.and_then(|pos| d.marks_since(pos)) {
+        None => {
             let parts: Vec<QPart> = match d.workspace() {
                 Some(ws) => d
                     .dom
@@ -1425,7 +1422,7 @@ fn query_parts(lua: &Lua) -> mlua::Result<std::rc::Rc<Vec<QPart>>> {
             c.doc_id = d.id;
             c.terrain = None;
         }
-        doc::Marks::Some(m) if !m.is_empty() => {
+        Some(m) if !m.is_empty() => {
             let mut touched: rustc_hash::FxHashSet<Ref> = Default::default();
             // Property changes of parts already listed: class and place in
             // the tree are as they were, only these values are read again.
@@ -1436,7 +1433,7 @@ fn query_parts(lua: &Lua) -> mlua::Result<std::rc::Rc<Vec<QPart>>> {
             thread_local!(static NAMES: [rbx_dom_weak::Ustr; 6] =
                 ["CFrame", "Size", "CanCollide", "CanQuery", "SmoothGrid", "Shape"].map(rbx_dom_weak::ustr));
             let [n_cf, n_size, n_collide, n_query, n_smooth, n_shape] = NAMES.with(|k| *k);
-            for mark in m {
+            for &mark in m {
                 match mark {
                     doc::Mark::Prop(r, name) => {
                         let bit = if name == n_cf {
@@ -1552,6 +1549,7 @@ fn query_parts(lua: &Lua) -> mlua::Result<std::rc::Rc<Vec<QPart>>> {
         }
         _ => {}
     }
+    d.mark_read(doc::Reader::Query);
     Ok(c.parts.clone())
 }
 

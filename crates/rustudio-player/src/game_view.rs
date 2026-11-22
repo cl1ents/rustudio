@@ -2031,6 +2031,10 @@ impl Game {
     /// The part (resolved to its top-level Model unless Alt is held) under a point.
 
     pub fn sync_view_draws(&mut self, ctx: &egui::Context) {
+        // (the last frame's commands are submitted before this one writes
+        // the buffers they read: egui's paint joined it already, unless
+        // nothing was painted)
+        rustudio_render::render_thread::wait();
         {
             let _s = rustudio_core::bench::scope("vp_sync_draws");
             self.sync_draws();
@@ -2327,6 +2331,9 @@ impl Game {
             // The same tone curve rule as the 3D view (lighting::tone_curve_on).
             let curve = rustudio_render::lighting::tone_curve_on(&self.doc).then_some(mech::TONE_CURVE);
             r.draw_world_gui(rs, ctx.font_texture_update(), &self.gui.world_batches, self.effects.drawn(), curve);
+            // The post chain over the scene and its effects, on to the
+            // render thread with the rest of the frame's commands.
+            r.finish_frame(rs);
             // 3D viewport adornments (Team Create collaborator camera gizmos, adorn.rs).
             r.draw_adorn(rs, &self.extra_adorn);
             // Highlights last, over the finished image (highlight.rs).
@@ -2407,7 +2414,7 @@ pub struct LightingState {
     lightgrid_inputs: Option<(Vec<u32>, Option<std::sync::Arc<Vec<u8>>>)>,
     lightgrid_lights: Vec<rustudio_render::render::LightRaw>,
     #[allow(clippy::type_complexity)]
-    lightgrid_job: Option<std::sync::mpsc::Receiver<(rustudio_render::lightgrid::GridBuild, f64, Vec<((String, u32), Vec<(Vec3, Vec3)>)>, bool)>>,
+    lightgrid_job: Option<std::sync::mpsc::Receiver<(rustudio_render::lightgrid::GridBuild, Option<rustudio_render::lightgrid_gpu::GridUpload>, f64, Vec<((String, u32), Vec<(Vec3, Vec3)>)>, bool)>>,
     /// The last full build's state (lightgrid::GridState): the next build
     /// redoes only what changed parts touch.
     lightgrid_state: Option<rustudio_render::lightgrid::GridState>,
@@ -2426,7 +2433,7 @@ pub struct LightingState {
     lightgrid_locals: Option<rustudio_render::lightgrid::LocalLights>,
     lightgrid_local_dirty: bool,
     #[allow(clippy::type_complexity)]
-    lightgrid_local_job: Option<std::sync::mpsc::Receiver<(rustudio_render::lightgrid::LocalLights, Vec<rustudio_render::lightgrid::LocalPatch>, f64)>>,
+    lightgrid_local_job: Option<std::sync::mpsc::Receiver<(rustudio_render::lightgrid::LocalLights, Option<rustudio_render::lightgrid_gpu::GridUpload>, f64)>>,
     /// Parts blocking local lights (lightocc.rs): the grid last asked for
     /// (first voxel, studs per voxel, document) and the one on the GPU,
     /// last rebuild, parts changed since, and the worker filling the next.
@@ -2610,16 +2617,14 @@ impl Game {
         }
         if let Some(rx) = &st.lightgrid_local_job {
             match rx.try_recv() {
-                Ok((locals, patches, ms)) => {
+                Ok((locals, upload, ms)) => {
                     // (the worker's own time, in the bench as a call per job)
                     rustudio_core::bench::add("lightgrid_local_job", ms, 1);
                     // (no full build starts while this runs, so the grid it
                     // re-lit is still the one shown; if not, rebuild)
                     if st.lightgrid_shown == Some(locals.origin) {
-                        if let (Some(renderer), Some(rs)) = (self.renderer.as_mut(), self.render_state.as_ref()) {
-                            for p in &patches {
-                                renderer.set_localgrid_region(&rs.queue, p);
-                            }
+                        if let (Some(renderer), Some(up)) = (self.renderer.as_mut(), upload) {
+                            renderer.upload_lightgrid(up);
                         }
                         st.lightgrid_local_dirty = !locals.matches_lights(&st.lightgrid_lights);
                         st.lightgrid_locals = Some(locals);
@@ -2637,7 +2642,9 @@ impl Game {
         }
         if let Some(rx) = &st.lightgrid_job {
             match rustudio_core::sim_clock::job_recv(rx) {
-                Ok((build, ms, learnt, pending)) => {
+                Ok((build, upload, ms, learnt, pending)) => {
+                    // (the upload was made ready on the job's thread: taking
+                    // it here only queues copies for the next frame)
                     let _apply = rustudio_core::bench::scope("lt_grid_apply");
                     rustudio_core::bench::add("lightgrid_job", ms, 1);
                     // (hulls the job worked out; one still computing on the
@@ -2646,10 +2653,8 @@ impl Game {
                     if pending {
                         st.lightgrid_dirty = true;
                     }
-                    if build.incremental {
-                        rustudio_core::bench::add("lightgrid_job_incremental", 0.0, 1);
-                    }
-                    let rustudio_render::lightgrid::GridBuild { mut grid, patches, occ, locals, state, incremental, changed } = build;
+                    rustudio_core::bench::add(if build.incremental { "lightgrid_job_incremental" } else { "lightgrid_job_full" }, 0.0, 1);
+                    let rustudio_render::lightgrid::GridBuild { grid, occ, locals, state, .. } = build;
                     st.lightgrid_occ = Some(occ);
                     st.lightgrid_state = Some(state);
                     if let Ok(points) = std::env::var("RUSTUDIO_LIGHTGRID_DEBUG") {
@@ -2661,27 +2666,13 @@ impl Game {
                             eprintln!("LIGHTGRID camera={:?} origin={:?} pos={:?} sky={:?}", self.cam.pos, grid.origin, pos, grid.sky_at(v));
                         }
                     }
-                    if let (Some(renderer), Some(rs)) = (self.renderer.as_mut(), self.render_state.as_ref()) {
-                        if !incremental {
-                            renderer.set_lightgrid(&rs.queue, &grid.data);
-                        } else if let Some((lo, hi)) = changed {
-                            // (only the voxels this build changed: the rest
-                            // of the texture is the last build's already)
-                            renderer.set_lightgrid_region(&rs.queue, &grid.data, lo, hi);
-                        }
-                        if incremental {
-                            // (over the channel the last build left there:
-                            // the same grid, kept up by the local path since)
-                            for p in &patches {
-                                renderer.set_localgrid_region(&rs.queue, p);
-                            }
-                        } else {
-                            renderer.set_localgrid(&rs.queue, &grid.local);
-                        }
+                    if let (Some(renderer), Some(up)) = (self.renderer.as_mut(), upload) {
+                        renderer.upload_lightgrid(up);
                         st.lightgrid_shown = Some(grid.origin);
-                        // (the GPU has the channel; it's kept as `locals`)
-                        grid.local = Vec::new();
-                        st.fx.grid = Some(std::sync::Arc::new(grid));
+                        // (the last grid's bytes are let go on the drop thread)
+                        if let Some(old) = st.fx.grid.replace(std::sync::Arc::new(grid)) {
+                            egui_wgpu::prewarm::drop_later(old);
+                        }
                         st.lightgrid_local_dirty = !locals.matches_lights(&st.lightgrid_lights);
                         st.lightgrid_locals = Some(locals);
                     }
@@ -2707,6 +2698,10 @@ impl Game {
             st.lightgrid_sun = sun_key;
             st.lightgrid_dirty = true;
         }
+        // (the build takes the sun as the key holds it: a rebuild for parts
+        // alone then keeps the last build's sun channel instead of sweeping
+        // it again for a sun a hair away)
+        let sun = if shadows { (Vec3::from_array(sun_key.map(|v| v as f32)) / 512.0).normalize_or(sun) } else { sun };
         let key = (origin, self.doc.id);
         let moved = st.lightgrid_key != Some(key);
         let since = st.lightgrid_at.map(|t| rustudio_core::sim_clock::since(t).as_secs_f32());
@@ -2787,7 +2782,7 @@ impl Game {
             let mut inputs: Vec<u32> = Vec::with_capacity(prims.len() * 18 + 8);
             inputs.extend(origin.map(|v| v as u32));
             inputs.push(u32::from(shadows));
-            inputs.extend(sun.to_array().map(f32::to_bits));
+            inputs.extend(sun_key.map(|v| v as u32));
             for (i, (p, boxes)) in prims.iter().enumerate() {
                 if unresolved.binary_search_by_key(&i, |u| u.0).is_ok() {
                     // (not known yet: never the same as a build that knew it)
@@ -2832,8 +2827,16 @@ impl Game {
                 (Some(s), Some(o), Some(l)) if st.lightgrid_shown == Some(origin) => Some((s, o, l)),
                 _ => None,
             };
+            if kept.is_none() {
+                // (why a build starts from scratch: the grid moved on, or
+                // there is no last build; the job's own full builds less
+                // these changed terrain or GlobalShadows)
+                rustudio_core::bench::add(if st.lightgrid_shown.is_some_and(|o| o != origin) { "lightgrid_full_moved" } else { "lightgrid_full_first" }, 0.0, 1);
+            }
             let (tx, rx) = std::sync::mpsc::channel();
             let mut prims = prims;
+            // (the GPU-ready bytes are written on the job's thread too)
+            let device = self.render_state.as_ref().map(|rs| rs.device.clone());
             std::thread::spawn(move || {
                 let t0 = std::time::Instant::now();
                 // The hull boxes the gather didn't know, as it worked them out.
@@ -2864,8 +2867,9 @@ impl Game {
                         prims[i].1 = Some(unit.iter().map(|(lo, hi)| (*lo * size, *hi * size)).collect());
                     }
                 }
-                let build = rustudio_render::lightgrid::build_grid(origin, &prims, terrain, shadows, sun, &local_lights, kept);
-                let _ = tx.send((build, t0.elapsed().as_secs_f64() * 1e3, learnt, pending));
+                let mut build = rustudio_render::lightgrid::build_grid(origin, &prims, terrain, shadows, sun, &local_lights, kept);
+                let upload = device.map(|d| rustudio_render::lightgrid_gpu::GridUpload::of_build(&d, &mut build));
+                let _ = tx.send((build, upload, t0.elapsed().as_secs_f64() * 1e3, learnt, pending));
             });
             st.lightgrid_job = Some(rx);
             st.lightgrid_key = Some(key);
@@ -2884,9 +2888,7 @@ impl Game {
                     match locals.update(&occ, &st.lightgrid_lights, mech::LIGHTGRID_LOCAL_PATCH_MAX) {
                         Ok(patches) => {
                             if let (Some(renderer), Some(rs)) = (self.renderer.as_mut(), self.render_state.as_ref()) {
-                                for p in &patches {
-                                    renderer.set_localgrid_region(&rs.queue, p);
-                                }
+                                renderer.upload_lightgrid(rustudio_render::lightgrid_gpu::GridUpload::of_patches(&rs.device, &patches));
                             }
                             st.lightgrid_local_dirty = false;
                         }
@@ -2895,11 +2897,13 @@ impl Game {
                             // lights' fields), handed back with its patches.
                             let lights = st.lightgrid_lights.clone();
                             let mut locals = st.lightgrid_locals.take().expect("locals");
+                            let device = self.render_state.as_ref().map(|rs| rs.device.clone());
                             let (tx, rx) = std::sync::mpsc::channel();
                             std::thread::spawn(move || {
                                 let t0 = std::time::Instant::now();
                                 let patches = locals.update(&occ, &lights, usize::MAX).unwrap_or_default();
-                                let _ = tx.send((locals, patches, t0.elapsed().as_secs_f64() * 1e3));
+                                let upload = device.map(|d| rustudio_render::lightgrid_gpu::GridUpload::of_patches(&d, &patches));
+                                let _ = tx.send((locals, upload, t0.elapsed().as_secs_f64() * 1e3));
                             });
                             st.lightgrid_local_job = Some(rx);
                             st.lightgrid_local_dirty = false;

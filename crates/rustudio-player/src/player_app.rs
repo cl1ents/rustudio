@@ -173,7 +173,9 @@ impl PlayerApp {
         self.last_work_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
         crate::profiler_counters::sample(game);
         if let Some(rs) = game.render_state.as_ref() {
-            rustudio_render::gpu_timing::end_frame(&rs.device, &rs.queue);
+            // (after the frame's submits, which may still be on the render thread)
+            let (device, queue) = (rs.device.clone(), rs.queue.clone());
+            rustudio_render::render_thread::run(move || rustudio_render::gpu_timing::end_frame(&device, &queue));
         }
         let bench_done = self.run.bench_frame(game, &ctx, self.last_work_ms, dt);
         if let Some(reason) = reason.or(bench_done.then_some("bench")) {
