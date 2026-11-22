@@ -27,6 +27,7 @@ use rbx_reflection::{DataType, PropertyKind, PropertyTag, Scriptability};
 use rustudio_core::log::Level;
 use rustudio_core::doc::{self, Document};
 use crate::ltypes::*;
+use self::domains::world::part::EnterPose;
 use rustudio_core::math::Xform;
 use rustudio_core::mech;
 
@@ -265,6 +266,9 @@ pub struct World {
     /// ones or freed any (`Runtime::gc_step` works faster then).
     pub orphans_seen: usize,
     pub gc_busy: bool,
+    /// The last collector pass stopped at its time budget (mech::GC_PASS_MS)
+    /// with candidates left: the next pass is due at once.
+    pub gc_cut: bool,
     /// Roblox's CoreScripts and CorePackages put in this DataModel
     /// (`Runtime::install_core_scripts`): the modules' bytecode by instance
     /// and the CoreScripts by name.
@@ -692,6 +696,7 @@ impl World {
             abs_all: true,
             orphans_seen: 0,
             gc_busy: true,
+            gc_cut: false,
             core_scripts: Default::default(),
             requests: Default::default(),
             input: Default::default(),
@@ -2675,10 +2680,10 @@ fn prop_get_plain(
 }
 
 pub fn set_parent(lua: &Lua, r: Ref, new_parent: Ref) -> mlua::Result<()> {
-    set_parent_opts(lua, r, new_parent, true, true)
+    set_parent_opts(lua, r, new_parent, true, true, EnterPose::Full)
 }
 
-fn set_parent_opts(lua: &Lua, r: Ref, new_parent: Ref, replicate: bool, stop_scripts: bool) -> mlua::Result<()> {
+fn set_parent_opts(lua: &Lua, r: Ref, new_parent: Ref, replicate: bool, stop_scripts: bool, pose: EnterPose) -> mlua::Result<()> {
     let (old, descendants, lost, snaps, enters_ws, stopped, gripped) = {
         let mut w = world(lua)?;
         let old = w
@@ -2784,7 +2789,7 @@ fn set_parent_opts(lua: &Lua, r: Ref, new_parent: Ref, replicate: bool, stop_scr
     if enters_ws {
         let _s = rustudio_core::bench::scope("sp_enter_pose");
         let mut w = world(lua)?;
-        let moves = domains::world::part::entering_joint_moves(w.d(), &descendants);
+        let moves = domains::world::part::entering_joint_moves(w.d(), &descendants, pose);
         apply_assembly_pose(&mut w, moves);
     }
     {
@@ -4437,7 +4442,7 @@ fn destroy_inst(lua: &Lua, r: Ref) -> mlua::Result<()> {
         // the client still has the pair when it gets here.
         w.record(RepOp::Destroy(r));
     }
-    set_parent_opts(lua, r, Ref::none(), true, false)?;
+    set_parent_opts(lua, r, Ref::none(), true, false, EnterPose::Full)?;
     let immediate = {
         let mut w = world(lua)?;
         if w.mode == RunMode::Edit {
@@ -4476,7 +4481,7 @@ fn destroy_inst(lua: &Lua, r: Ref) -> mlua::Result<()> {
             }
             w.fire(d, "Destroying", vec![]);
             drop(w);
-            set_parent_opts(lua, d, Ref::none(), false, false)?;
+            set_parent_opts(lua, d, Ref::none(), false, false, EnterPose::Full)?;
             world(lua)?.destroyed.insert(d);
             signal_timing::flush_immediate(lua);
             order.push((d, p));
@@ -6617,6 +6622,7 @@ impl Runtime {
         // being made, so the Luau collector is stepped at the fast rate
         // (`gc_step`). A trickle (a GUI script swapping a few labels) isn't.
         let arrived = w.orphans.len().saturating_sub(w.orphans_seen) >= mech::GC_BUSY_ORPHANS;
+        w.gc_cut = false;
         if w.orphans.is_empty() {
             w.orphans_seen = 0;
             w.gc_busy = false;
@@ -6626,8 +6632,14 @@ impl Runtime {
         let candidates: Vec<Ref> = w.orphans.iter().copied().collect();
         let mut looked = 0usize;
         let mut freed: Vec<Ref> = Vec::new();
+        let started = Instant::now();
+        let limit = Duration::from_secs_f64(mech::GC_PASS_MS / 1000.0);
         for r in candidates {
             if looked >= budget {
+                break;
+            }
+            if started.elapsed() >= limit {
+                w.gc_cut = true;
                 break;
             }
             let d = w.d();
@@ -7631,6 +7643,15 @@ impl Runtime {
     /// Replication: reparents as the server did (fires ChildAdded etc.).
     pub fn apply_parent(&self, r: Ref, parent: Ref) {
         if let Err(e) = set_parent(&self.lua, r, parent) {
+            report(&self.lua, &e);
+        }
+    }
+
+    /// [`Runtime::apply_parent`] for replication: what enters the Workspace
+    /// was posed by its sender, so only its new parts are posed against the
+    /// parts already here (`EnterPose::Replicated`).
+    pub fn apply_parent_replicated(&self, r: Ref, parent: Ref) {
+        if let Err(e) = set_parent_opts(&self.lua, r, parent, true, true, EnterPose::Replicated) {
             report(&self.lua, &e);
         }
     }

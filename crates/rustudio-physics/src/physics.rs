@@ -2074,6 +2074,11 @@ impl Physics {
                 }
             }
         }
+        rustudio_core::bench::add("count: pfc_changed", changed.len() as f64, 1);
+        rustudio_core::bench::add("count: pfc_trees", trees.len() as f64, 1);
+        if all {
+            rustudio_core::bench::add("count: pfc_all", 1.0, 1);
+        }
         let mut seen: HashSet<Ref> = HashSet::default();
         let mut resized: HashSet<Ref> = HashSet::default();
         for c in changed {
@@ -3530,13 +3535,6 @@ impl Physics {
                 self.pending_vel.insert(r, (v, left - 1));
             }
         }
-        let (hz, _, max_steps) = step_rate();
-        let h = 1.0 / hz;
-        // Discard elapsed time above the frame budget on a hitch. Keep the
-        // fractional remainder so ordinary frames stay on the 240 Hz grid.
-        let wanted = self.accum + dt.max(0.0);
-        self.accum = wanted.min(h * max_steps as f32);
-        let owed = ((wanted - self.accum) * 60.0) as u32;
         self.throttle.mode = doc
             .workspace()
             .and_then(|w| match doc.prop(w, "PhysicsEnvironmentalThrottle") {
@@ -3550,6 +3548,17 @@ impl Physics {
         if let Some(v) = *FORCE.get_or_init(|| std::env::var("RUSTUDIO_PHYSICS_ENV_THROTTLE").ok().and_then(|v| v.parse().ok())) {
             self.throttle.mode = crate::throttle::Mode::from_value(v);
         }
+        let (hz, _, _) = step_rate();
+        let h = 1.0 / hz;
+        // Studio's step count for a frame (0.746 `World::updateStepsRequiredForCyclicExecutive`,
+        // throttle.rs `max_world_steps`): at most 12 world steps, 4 while the environment is
+        // throttled to 40 % or less, and at most mech::PHYSICS_CARRY_MAX_STEPS of the rest kept
+        // for the next frame. Elapsed time above that is dropped: a slow frame slows the
+        // simulation instead of running an unbounded catch-up.
+        let max_steps = self.throttle.max_world_steps();
+        let wanted = self.accum + dt.max(0.0);
+        self.accum = wanted.min(h * (max_steps as f32 + mech::PHYSICS_CARRY_MAX_STEPS));
+        let owed = ((wanted - self.accum) * 60.0) as u32;
         let jsc = rustudio_core::bench::scope("ph_joints");
         {
             let _a = rustudio_core::bench::scope("pj_apply_joints");
@@ -3743,6 +3752,7 @@ impl Physics {
         // The environmental throttle decides per 60 Hz frame (a group of
         // maxLevel ticks); an unthrottled frame's wall time feeds its level
         // (its ticks may span two batches).
+        let ticks_before = self.steps;
         for _ in 0..max_steps {
             if self.accum <= due {
                 break;
@@ -3826,6 +3836,7 @@ impl Physics {
                 self.dump_tick(doc);
             }
         }
+        rustudio_core::bench::add("count: ph_ticks", (self.steps - ticks_before) as f64, 1);
         if studio {
             // Studio publishes moved poses after the frame's world steps.
             self.humanoid_solved();
@@ -5349,14 +5360,19 @@ mod tests {
         assert_eq!(p.env_owed, ENV_OWED_MAX);
     }
 
+    /// A hitch runs at most MAX_PHYSICS_STEPS and keeps at most
+    /// PHYSICS_CARRY_MAX_STEPS of the rest for the next frame (Studio 0.746
+    /// `World::updateStepsRequiredForCyclicExecutive`); the rest is dropped.
     #[test]
-    fn physics_hitch_keeps_no_step_debt() {
+    fn physics_hitch_keeps_at_most_four_steps_of_debt() {
         let (mut doc, mut physics) = hum_world(vec![]);
-        let (hz, _, max_steps) = step_rate();
+        let (hz, _, _) = step_rate();
         physics.step(&mut doc, 1.0);
-        assert_eq!(physics.steps, max_steps as u64);
+        assert_eq!(physics.steps, mech::MAX_PHYSICS_STEPS as u64);
         physics.step(&mut doc, 1.0 / hz);
-        assert_eq!(physics.steps, (max_steps + 1) as u64);
+        assert_eq!(physics.steps, (mech::MAX_PHYSICS_STEPS + 5) as u64);
+        physics.step(&mut doc, 1.0 / hz);
+        assert_eq!(physics.steps, (mech::MAX_PHYSICS_STEPS + 6) as u64);
     }
 
     #[test]

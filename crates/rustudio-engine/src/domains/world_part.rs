@@ -475,6 +475,7 @@ impl Graph {
         drop(recs);
         let _r = rustudio_core::bench::scope("jg_regroup");
         if removed {
+            rustudio_core::bench::add("count: jg_removed", 1.0, 1);
             self.regroup(d, dp);
         } else {
             self.merge_in(d, dp, &dj, &added);
@@ -860,13 +861,29 @@ enum JointPoseEdit {
 /// Pose the affected side of an assembly, keeping the root fixed. A newly
 /// active joint supplies its stored rest offset. An offset edit replaces just
 /// that factor in the current pose, preserving the motor's last stepped pose.
-fn joint_pose_moves(d: &Document, g: &Graph, edits: &HashMap<Ref, JointPoseEdit>) -> Vec<(Ref, Xform)> {
-    use rustudio_core::body::joint_frames;
+///
+/// `arrived`: the parts of a replicated subtree entering the Workspace
+/// (`EnterPose::Replicated`). The sender posed them already; what may still
+/// move is the new parts against the client's own (its character a hand
+/// holds an accessory to). The walk then starts at the assembly's parts
+/// that were there before (`arrival_seeds`) and goes through the arrived
+/// ones only: a welded map streaming in walked the whole map for every
+/// piece (test `chained_welded_map_poses_only_the_arriving_pieces`).
+fn joint_pose_moves(
+    d: &Document,
+    g: &Graph,
+    edits: &HashMap<Ref, JointPoseEdit>,
+    arrived: Option<&HashSet<Ref>>,
+) -> Vec<(Ref, Xform)> {
     let mut posed = HashSet::new();
     let mut writes = Vec::new();
     for joint in edits.keys() {
         let Some((a, b)) = g.recs.get(joint).and_then(|rec| rec.edge) else { continue };
         if posed.contains(&a) || posed.contains(&b) || anchored(d, a) && anchored(d, b) {
+            continue;
+        }
+        if let Some(seeds) = arrived.and_then(|t| arrival_seeds(d, g, edits, t, a)) {
+            pose_walk(d, g, edits, seeds, arrived, &mut posed, &mut writes);
             continue;
         }
         let members = g.assembly(a);
@@ -877,61 +894,115 @@ fn joint_pose_moves(d: &Document, g: &Graph, edits: &HashMap<Ref, JointPoseEdit>
             let mut at = ChildPositions::default();
             roots.sort_by_cached_key(|p| std::cmp::Reverse(bfs_key(d, *p, &mut at)));
         }
-        let mut queue = VecDeque::new();
-        for root in roots {
-            posed.insert(root);
-            if let Some(frame) = xf(d, root, "CFrame") {
-                queue.push_back((root, frame, frame));
-            }
-        }
-        while let Some((part, before, after)) = queue.pop_front() {
-            let Some(joints) = g.joints.get(&part) else { continue };
-            for j in joints {
-                let Some((p0, p1)) = g.recs.get(j).and_then(|rec| rec.edge) else { continue };
-                let forward = part == p0;
-                let child = if forward { p1 } else { p0 };
-                // A leaf (no other rigid joint) carried unchanged by an
-                // unedited joint is neither written nor walked on from: a
-                // weld into a map of thousands welded to one base walked
-                // every one of them per piece.
-                if before == after
-                    && !edits.contains_key(j)
-                    && g.rigid.get(&child).is_some_and(|n| n.len() == 1)
-                {
-                    continue;
-                }
-                if !posed.insert(child) {
-                    continue;
-                }
-                let Some(child_before) = xf(d, child, "CFrame") else { continue };
-                let mut child_after = child_before;
-                if let Some((edit, (_, _, c0, c1))) = edits.get(j).zip(joint_frames(d, *j)) {
-                    let (a, b) = if forward { (before, child_before) } else { (child_before, before) };
-                    let relative = |a: Xform, b: Xform| Xform {
-                        pos: a.rot.transpose() * (b.pos - a.pos),
-                        rot: a.rot.transpose() * b.rot,
-                    };
-                    let offset = match edit {
-                        JointPoseEdit::Activate => cf_mul(&c0, &cf_inv(&c1)),
-                        JointPoseEdit::C0(old) => cf_mul(&cf_mul(&c0, &cf_inv(old)), &relative(a, b)),
-                        JointPoseEdit::C1(old) => cf_mul(&relative(a, b), &cf_mul(old, &cf_inv(&c1))),
-                    };
-                    child_after = cf_mul(&after, &if forward { offset } else { cf_inv(&offset) });
-                } else if before != after {
-                    child_after = Xform {
-                        pos: after.apply(before.rot.transpose() * (child_before.pos - before.pos)),
-                        rot: after.rot * before.rot.transpose() * child_before.rot,
-                    };
-                }
-                if child_before != child_after {
-                    child_after = child_after.orthonormalized();
-                    writes.push((child, child_after));
-                }
-                queue.push_back((child, child_before, child_after));
-            }
-        }
+        pose_walk(d, g, edits, roots, None, &mut posed, &mut writes);
     }
     writes
+}
+
+/// Where the walk of an arrival into `a`'s assembly starts, in the order a
+/// walk from its roots would take them: the parts of the assembly that were
+/// there before and hold an edited joint, its anchored new parts, and its
+/// root when it is an old part. None (walk from the roots) when the root
+/// is a new unanchored part (the new parts carry the old ones then) or
+/// nothing old is in the assembly.
+fn arrival_seeds(d: &Document, g: &Graph, edits: &HashMap<Ref, JointPoseEdit>, arrived: &HashSet<Ref>, a: Ref) -> Option<Vec<Ref>> {
+    let gi = *g.group.get(&a)?;
+    let (root, grounded) = g.roots[gi];
+    if !grounded && arrived.contains(&root) {
+        return None;
+    }
+    let mine = |x: &Ref| g.group.get(x) == Some(&gi);
+    let mut seeds: HashSet<Ref> = edits
+        .keys()
+        .filter_map(|j| g.recs.get(j).and_then(|rec| rec.edge))
+        .flat_map(|(p0, p1)| [p0, p1])
+        .filter(|x| mine(x) && !arrived.contains(x))
+        .collect();
+    seeds.extend(arrived.iter().copied().filter(|x| mine(x) && anchored(d, *x)));
+    if !grounded {
+        seeds.insert(root);
+    }
+    if seeds.iter().all(|x| arrived.contains(x)) {
+        return None;
+    }
+    let mut seeds: Vec<Ref> = seeds.into_iter().collect();
+    let mut at = ChildPositions::default();
+    seeds.sort_by_cached_key(|p| std::cmp::Reverse(bfs_key(d, *p, &mut at)));
+    Some(seeds)
+}
+
+/// Breadth-first from `starts` (held where they are) along the rigid
+/// joints, posing each part from the one it was reached by; with `only`,
+/// into those parts alone (the rest keep their poses).
+fn pose_walk(
+    d: &Document,
+    g: &Graph,
+    edits: &HashMap<Ref, JointPoseEdit>,
+    starts: Vec<Ref>,
+    only: Option<&HashSet<Ref>>,
+    posed: &mut HashSet<Ref>,
+    writes: &mut Vec<(Ref, Xform)>,
+) {
+    use rustudio_core::body::joint_frames;
+    let mut queue = VecDeque::new();
+    for root in starts {
+        posed.insert(root);
+        if let Some(frame) = xf(d, root, "CFrame") {
+            queue.push_back((root, frame, frame));
+        }
+    }
+    let mut walked = 0u64;
+    while let Some((part, before, after)) = queue.pop_front() {
+        let Some(joints) = g.joints.get(&part) else { continue };
+        for j in joints {
+            let Some((p0, p1)) = g.recs.get(j).and_then(|rec| rec.edge) else { continue };
+            let forward = part == p0;
+            let child = if forward { p1 } else { p0 };
+            if only.is_some_and(|t| !t.contains(&child)) {
+                continue;
+            }
+            // A leaf (no other rigid joint) carried unchanged by an
+            // unedited joint is neither written nor walked on from: a
+            // weld into a map of thousands welded to one base walked
+            // every one of them per piece.
+            if before == after
+                && !edits.contains_key(j)
+                && g.rigid.get(&child).is_some_and(|n| n.len() == 1)
+            {
+                continue;
+            }
+            if !posed.insert(child) {
+                continue;
+            }
+            let Some(child_before) = xf(d, child, "CFrame") else { continue };
+            let mut child_after = child_before;
+            if let Some((edit, (_, _, c0, c1))) = edits.get(j).zip(joint_frames(d, *j)) {
+                let (a, b) = if forward { (before, child_before) } else { (child_before, before) };
+                let relative = |a: Xform, b: Xform| Xform {
+                    pos: a.rot.transpose() * (b.pos - a.pos),
+                    rot: a.rot.transpose() * b.rot,
+                };
+                let offset = match edit {
+                    JointPoseEdit::Activate => cf_mul(&c0, &cf_inv(&c1)),
+                    JointPoseEdit::C0(old) => cf_mul(&cf_mul(&c0, &cf_inv(old)), &relative(a, b)),
+                    JointPoseEdit::C1(old) => cf_mul(&relative(a, b), &cf_mul(old, &cf_inv(&c1))),
+                };
+                child_after = cf_mul(&after, &if forward { offset } else { cf_inv(&offset) });
+            } else if before != after {
+                child_after = Xform {
+                    pos: after.apply(before.rot.transpose() * (child_before.pos - before.pos)),
+                    rot: after.rot * before.rot.transpose() * child_before.rot,
+                };
+            }
+            if child_before != child_after {
+                child_after = child_after.orthonormalized();
+                writes.push((child, child_after));
+            }
+            queue.push_back((child, child_before, child_after));
+            walked += 1;
+        }
+    }
+    rustudio_core::bench::add("count: jp_walked", walked as f64, 1);
 }
 
 pub(crate) fn joint_property_moves(
@@ -959,11 +1030,21 @@ pub(crate) fn joint_property_moves(
             };
             HashMap::from([(r, edit)])
         };
-        joint_pose_moves(d, g, &edits)
+        joint_pose_moves(d, g, &edits, None)
     })
 }
 
-pub(crate) fn entering_joint_moves(d: &Document, tree: &[Ref]) -> Vec<(Ref, Xform)> {
+/// How a subtree entering the Workspace is posed by its joints.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EnterPose {
+    /// A script's or the engine's parenting: the assembly is posed from its roots.
+    Full,
+    /// Replication brought it (already posed by the sender): only the new
+    /// parts are posed, against the parts that were there (`joint_pose_moves`).
+    Replicated,
+}
+
+pub(crate) fn entering_joint_moves(d: &Document, tree: &[Ref], how: EnterPose) -> Vec<(Ref, Xform)> {
     if !tree.iter().any(|r| d.class_of(*r).is_some_and(|class| {
         doc::is_a(&class, "BasePart") || poses_immediately(class.as_str())
     })) {
@@ -983,7 +1064,8 @@ pub(crate) fn entering_joint_moves(d: &Document, tree: &[Ref]) -> Vec<(Ref, Xfor
             .filter(|j| d.class_of(*j).is_some_and(|c| poses_immediately(c.as_str())))
             .map(|j| (j, JointPoseEdit::Activate))
             .collect();
-        joint_pose_moves(d, g, &edits)
+        let arrived: Option<HashSet<Ref>> = (how == EnterPose::Replicated).then(|| tree.iter().copied().collect());
+        joint_pose_moves(d, g, &edits, arrived.as_ref())
     })
 }
 

@@ -436,6 +436,8 @@ pub struct PlaySession {
     /// When the instance collector last ran (`collect_garbage`), and parts the
     /// engine itself took out of the tree (fallen) for it to free.
     gc_at: f64,
+    /// The last pass stopped at mech::GC_PASS_MS with candidates left.
+    gc_more: bool,
     engine_orphans: Vec<Ref>,
     /// RUSTUDIO_MEMSTATS: when the last line was printed, and frames since.
     memstats_at: f64,
@@ -507,6 +509,7 @@ impl PlaySession {
             window_focused: true,
             gamepads: Default::default(),
             gc_at: 0.0,
+            gc_more: false,
             engine_orphans: Vec::new(),
             memstats_at: 0.0,
             memstats_frames: 0,
@@ -1465,7 +1468,8 @@ impl Game {
         let Some(s) = self.play.as_mut() else { return };
         s.memstats_frames += 1;
         s.memstats_worst = s.memstats_worst.max(dt);
-        let pass = s.time - s.gc_at >= rustudio_core::mech::GC_INTERVAL;
+        // (A pass that stopped at its time budget goes on the next frame.)
+        let pass = s.time - s.gc_at >= rustudio_core::mech::GC_INTERVAL || s.gc_more;
         {
             let _sc = rustudio_core::bench::scope("p9_gc_step");
             for side in [Side::Server, Side::Client] {
@@ -1482,7 +1486,7 @@ impl Game {
         let model = s.character.as_ref().map(|c| c.model).unwrap_or_else(Ref::none);
         let due = rustudio_engine::runtime::memstats_on() && s.time - s.memstats_at >= 5.0;
         let _sc = rustudio_core::bench::scope("p9_collect");
-        let (server_freed, srv) = self
+        let (server_freed, srv, server_cut) = self
             .with_side(Side::Server, |rt, _, map| {
                 for r in &fallen {
                     rt.note_orphan(*r);
@@ -1493,17 +1497,20 @@ impl Game {
                     &|r| r == player || r == model || map.s2c.contains_key(&r) || plugin_pins.contains(&r),
                     rustudio_core::mech::GC_BUDGET,
                 );
-                (freed.len(), if due { rt.mem_stats() } else { String::new() })
+                let cut = rt.world_mut().is_some_and(|w| w.gc_cut);
+                (freed.len(), if due { rt.mem_stats() } else { String::new() }, cut)
             })
             .unwrap_or_default();
-        let (client_freed, cli) = self
+        let (client_freed, cli, client_cut) = self
             .with_side(Side::Client, |rt, _, map| {
                 let plugin_pins = host.plugin_pins(&rt.lua);
                 let freed = rt.collect(&|r| map.c2s.contains_key(&r) || plugin_pins.contains(&r), rustudio_core::mech::GC_BUDGET);
-                (freed.len(), if due { rt.mem_stats() } else { String::new() })
+                let cut = rt.world_mut().is_some_and(|w| w.gc_cut);
+                (freed.len(), if due { rt.mem_stats() } else { String::new() }, cut)
             })
             .unwrap_or_default();
         let Some(s) = self.play.as_mut() else { return };
+        s.gc_more = server_cut || client_cut;
         if !due {
             return;
         }
