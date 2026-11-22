@@ -906,7 +906,7 @@ pub const HUMANOID_AIR_ACCEL: f32 = 143.0;
 // Instance collector (crates/rustudio-engine/src/runtime.rs Runtime::collect, src/play.rs collect_garbage).
 pub const GC_INTERVAL: f64 = 0.5; // seconds of Play between collector passes
 pub const GC_BUDGET: usize = 20_000; // unparented instances looked at per pass and side
-pub const GC_PASS_MS: f64 = 4.0; // wall time a collector pass may take per side; a pass cut short goes on the next frame (estimated: Roblox frees instances incrementally, its LuauGc job per-frame bounded)
+pub const GC_PASS_MS: f64 = 4.0; // wall time a collector pass may take per side; the next pass (GC_INTERVAL later) goes on where it stopped (estimated: Roblox frees instances incrementally, its LuauGc job per-frame bounded)
 pub const GC_CYCLE_PASSES: usize = 2; // collector passes a Luau GC cycle is stepped over (each steps heap / this KB; keeps weak instance values clearing on quiet scripts)
 pub const GC_STEP_MIN_KB: usize = 256; // least Luau GC work per collector pass
 pub const GC_STEP_MAX_KB: usize = 16 * 1024; // most Luau GC work per collector pass (bounds the pass's time on huge heaps)

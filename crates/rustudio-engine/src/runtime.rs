@@ -266,9 +266,9 @@ pub struct World {
     /// ones or freed any (`Runtime::gc_step` works faster then).
     pub orphans_seen: usize,
     pub gc_busy: bool,
-    /// The last collector pass stopped at its time budget (mech::GC_PASS_MS)
-    /// with candidates left: the next pass is due at once.
-    pub gc_cut: bool,
+    /// Where in the watched list the collector's next pass starts (each pass
+    /// stops at its budget, mech::GC_PASS_MS, and the next goes on from there).
+    pub gc_cursor: usize,
     /// Roblox's CoreScripts and CorePackages put in this DataModel
     /// (`Runtime::install_core_scripts`): the modules' bytecode by instance
     /// and the CoreScripts by name.
@@ -696,7 +696,7 @@ impl World {
             abs_all: true,
             orphans_seen: 0,
             gc_busy: true,
-            gc_cut: false,
+            gc_cursor: 0,
             core_scripts: Default::default(),
             requests: Default::default(),
             input: Default::default(),
@@ -6622,24 +6622,25 @@ impl Runtime {
         // being made, so the Luau collector is stepped at the fast rate
         // (`gc_step`). A trickle (a GUI script swapping a few labels) isn't.
         let arrived = w.orphans.len().saturating_sub(w.orphans_seen) >= mech::GC_BUSY_ORPHANS;
-        w.gc_cut = false;
         if w.orphans.is_empty() {
             w.orphans_seen = 0;
             w.gc_busy = false;
             return Vec::new();
         }
         let root = w.d().dom.root_ref();
-        let candidates: Vec<Ref> = w.orphans.iter().copied().collect();
+        let mut candidates: Vec<Ref> = w.orphans.iter().copied().collect();
+        // Each pass starts where the last one stopped (its budget), so the
+        // unparented instances scripts still hold don't take every pass.
+        let from = w.gc_cursor % candidates.len();
+        candidates.rotate_left(from);
         let mut looked = 0usize;
         let mut freed: Vec<Ref> = Vec::new();
         let started = Instant::now();
         let limit = Duration::from_secs_f64(mech::GC_PASS_MS / 1000.0);
-        for r in candidates {
-            if looked >= budget {
-                break;
-            }
-            if started.elapsed() >= limit {
-                w.gc_cut = true;
+        w.gc_cursor = 0;
+        for (k, r) in candidates.into_iter().enumerate() {
+            if looked >= budget || started.elapsed() >= limit {
+                w.gc_cursor = from + k;
                 break;
             }
             let d = w.d();
