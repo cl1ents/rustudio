@@ -268,6 +268,13 @@ pub fn wgpu_options(bench_mode: bool) -> egui_wgpu::WgpuConfiguration {
     egui_wgpu::WgpuConfiguration {
         wgpu_setup: {
             let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+            // wgpu's build-config flags turn the Khronos validation layer on
+            // in every debug-assertions build (the dev profile): it checked
+            // every GPU call on the render thread and tore the device down
+            // under it at exit (a SIGSEGV in libVkLayer_khronos_validation
+            // while the render thread freed a buffer, a coredump's stack).
+            // WGPU_VALIDATION=1 / WGPU_DEBUG=1 still turn them on.
+            setup.instance_descriptor.flags = egui_wgpu::wgpu::InstanceFlags::empty().with_env();
             let descriptor = setup.device_descriptor.clone();
             // A real GPU before a software one, a native API before
             // OpenGL (gpu_caps::rank_adapters): on Windows an HD 4600's GL

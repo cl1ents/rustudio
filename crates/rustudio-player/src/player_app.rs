@@ -458,6 +458,7 @@ pub fn run() -> eframe::Result<()> {
             move |ctx, rs| PlayerApp::new(ctx, rs, None, open, run, demo),
             PlayerApp::frame,
         );
+        drain_render_thread();
         std::process::exit(code.max(EXIT_CODE.load(std::sync::atomic::Ordering::Relaxed)));
     }
     // The standalone player has no redraw pacing of its own (the editor's
@@ -477,11 +478,20 @@ pub fn run() -> eframe::Result<()> {
         let wayland = cc.window_handle().ok().map(|h| matches!(h.as_raw(), RawWindowHandle::Wayland(_)));
         Ok(Box::new(PlayerApp::new(&cc.egui_ctx, cc.wgpu_render_state.clone(), wayland, open, run, demo)))
     }));
+    drain_render_thread();
     let code = EXIT_CODE.load(std::sync::atomic::Ordering::Relaxed);
     if code != 0 {
         std::process::exit(code);
     }
     result
+}
+
+/// The render thread finishes what it was handed before the process exits:
+/// exit handlers tearing the GPU device down under a job still freeing its
+/// buffers crashed the player (SIGSEGV at exit, a coredump's stack). A job's
+/// panic, re-raised by `wait`, doesn't stop the exit.
+fn drain_render_thread() {
+    let _ = std::panic::catch_unwind(rustudio_render::render_thread::wait);
 }
 
 fn window_arg(argv: &[String]) -> Option<(u32, u32)> {
