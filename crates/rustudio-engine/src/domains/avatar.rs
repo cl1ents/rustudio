@@ -42,6 +42,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("SetFingerTip", "DigitsRigDescription"),
     ("SetJoint", "DigitsRigDescription"),
     ("GetAccessoryType", "AvatarEditorService"),
+    ("BustAvatarFetchCache", "AvatarEditorService"),
 ];
 pub const EVENTS: &[(&str, &str)] = &[
     ("PromptAllowInventoryReadAccessCompleted", "AvatarEditorService"),
@@ -134,6 +135,14 @@ pub fn call(lua: &Lua, name: &str, this: Ref, args: &MultiValue) -> Option<mlua:
     }
     if class == "AvatarEditorService" && name == "GetAccessoryType" {
         return Some(accessory_type(lua, args));
+    }
+    // The menu's Respawn / Reset calls it before the character respawns, so
+    // the new one wears the avatar as it is now: the host fetches it again.
+    if class == "AvatarEditorService" && name == "BustAvatarFetchCache" {
+        return Some(world(lua).map(|mut w| {
+            w.avatar_fetch_busted = true;
+            MultiValue::new()
+        }));
     }
     if matches!(class.as_str(), "HumanoidRigDescription" | "DigitsRigDescription") {
         if let Some(r) = rig::call(lua, &class, name, this, args) {

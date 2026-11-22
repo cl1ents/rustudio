@@ -357,7 +357,15 @@ HttpService:GetUserAgent, Translator:RobloxOnlyTranslate,
 GuiService:GetClosestDialogToPosition / GetClosestVisibleDialogToPosition;
 SetCore / GetCore handlers run at their registrant's identity (a game
 LocalScript's SetCore reaching a CoreScript handler that needs LocalUser).
-Engine features (GetEngineFeature) have no public source and read false.
+Engine features (GetEngineFeature) have no public source and read false,
+except AvatarChatServiceEnabled: AvatarChatService answers a client without
+voice or camera chat (ClientFeatures 0, IsEnabled tests a bit of a mask,
+EnableVoice false), VideoCaptureService:GetCameraDevices an empty list, and
+VoiceChatCore's CoreVoiceManager (which needs the service) no longer errors.
+AvatarEditorService:BustAvatarFetchCache (the menu's Respawn) fetches the
+signed-in avatar again for the next character. String properties, names,
+attributes and string arguments take any Lua bytes, as Roblox does; bytes
+that aren't UTF-8 are left out (estimate: rustudio holds UTF-8 text).
 
 Menu and styles (round 2): Foundation (the CoreScripts' UI kit) styles its
 objects through StyleSheets with tags (".size-full", ".row ::UIListLayout").
@@ -416,9 +424,7 @@ Look (round 3, compared with the real client's captures):
   LegacyArial at its 1.5× size. Section headers are text-heading-small
   (Builder Sans Bold 25, the Foundation token) in content-emphasis white.
 
-Still open: the Respawn confirmation page draws its text tiny (its confirm
-button not yet verified); VoiceChatCore.CoreVoiceManager:680 indexes a nil
-service (AvatarChatService behind an engine feature, which reads false).
+Still open: the Respawn confirmation page draws its text tiny.
 TextService:GetTextSizeOffsetAsync is still a stub. The Help tab wraps
 "Drop tool", "Use tool" and "Mouse lock" (Roblox doesn't) and its Camera
 movement / Menu items groups are not on screen; setting FontFace doesn't

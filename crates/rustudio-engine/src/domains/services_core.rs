@@ -11,9 +11,10 @@
 //!
 //! Flag values: Roblox's served client flags when Play loaded them
 //! (rustudio_core::client_flags), else the default a CoreScript gives
-//! (`DefineFastFlag(name, default)`), else false / 0 / "" (estimate). Engine features answer
-//! false: they gate engine API newer than what rustudio has, and the
-//! CoreScripts take their older path without them (estimate).
+//! (`DefineFastFlag(name, default)`), else false / 0 / "" (estimate). Engine
+//! features answer false (`ENGINE_FEATURES` aside): they gate engine API
+//! newer than what rustudio has, and the CoreScripts take their older path
+//! without them (estimate).
 
 use std::collections::HashMap;
 
@@ -183,6 +184,13 @@ pub(super) fn luau_member(lua: &Lua, owner: &str, name: &str) -> mlua::Result<bo
     m.contains_key(format!("{owner}.{name}"))
 }
 
+/// Engine features rustudio answers true: the API each gates is
+/// implemented. AvatarChatServiceEnabled: AvatarChatService
+/// (media_misc.rs). Roblox's clients have it on: VoiceChatCore's
+/// CoreVoiceManager:FetchVoicePermissions calls `self.AvatarChatService`
+/// unconditionally, and that field is nil with the feature off.
+const ENGINE_FEATURES: &[&str] = &["AvatarChatServiceEnabled"];
+
 pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlua::Result<MultiValue> {
     match name {
         // services_core.luau: every member it defines.
@@ -345,8 +353,8 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
         }
         // "GetEngineFeature"
         _ => {
-            name_arg(args, name)?;
-            Ok(MultiValue::from_iter([Value::Boolean(false)]))
+            let feature = name_arg(args, name)?;
+            Ok(MultiValue::from_iter([Value::Boolean(ENGINE_FEATURES.contains(&feature.as_str()))]))
         }
     }
 }

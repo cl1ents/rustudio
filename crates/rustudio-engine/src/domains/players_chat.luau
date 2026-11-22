@@ -728,31 +728,38 @@ local function server_setup()
 		folder.Parent = svc.TextChatService
 	end
 end
-local sourced = setmetatable({}, { __mode = "k" })
+-- The UserIds whose TextSources were made. A player who left is told by
+-- its id missing from GetPlayers, never through its Player: the host can
+-- remove that Player from this DataModel outright (no Destroy), and touching
+-- it would raise every frame.
+local sourced = {}
 local function server_sources()
 	if not set_up or not svc.TextChatService.CreateDefaultTextChannels then return end
 	local folder = svc.TextChatService:FindFirstChild("TextChannels")
 	if not folder then return end
+	local present = {}
 	for _, p in svc.Players:GetPlayers() do
-		if not sourced[p] then
-			sourced[p] = true
+		local uid = p.UserId
+		present[uid] = true
+		if not sourced[uid] then
+			sourced[uid] = true
 			for _, n in { "RBXSystem", "RBXGeneral" } do
 				local ch = folder:FindFirstChild(n)
-				if ch and not source_of(ch, p.UserId) then
+				if ch and not source_of(ch, uid) then
 					local s = R.create("TextSource")
 					s.Name = p.Name
-					__rs_set_raw(s, "UserId", p.UserId)
+					__rs_set_raw(s, "UserId", uid)
 					s.CanSend = n == "RBXGeneral"
 					s.Parent = ch
 				end
 			end
 		end
 	end
-	for p in sourced do
-		if p.Parent == nil then
-			sourced[p] = nil
+	for uid in sourced do
+		if not present[uid] then
+			sourced[uid] = nil
 			for _, ch in folder:GetChildren() do
-				local s = ch:IsA("TextChannel") and source_of(ch, p.UserId)
+				local s = ch:IsA("TextChannel") and source_of(ch, uid)
 				if s then s:Destroy() end
 			end
 		end

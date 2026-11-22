@@ -194,6 +194,9 @@ pub struct World {
     /// dresses those models with its clothing, face and accessories).
     pub avatar: Option<crate::avatar::AvatarLook>,
     pub avatar_descs: HashSet<Ref>,
+    /// AvatarEditorService:BustAvatarFetchCache was called: the host fetches
+    /// the avatar again (the next character and `avatar` get the new one).
+    pub avatar_fetch_busted: bool,
     /// Instances with at least one connection or waiter (fires on others are dropped early).
     pub listening: rustc_hash::FxHashSet<Ref>,
     /// Instances something ever connected to (or waited on) for a touch event
@@ -668,6 +671,7 @@ impl World {
             groups: rustudio_core::collision_groups::shared(),
             avatar: None,
             avatar_descs: HashSet::new(),
+            avatar_fetch_busted: false,
             listening: Default::default(),
             touch_refs: Default::default(),
             touch_rev: 0,
@@ -1204,6 +1208,19 @@ fn bad_assign(prop: &str, expected: &str, got: &Value) -> mlua::Error {
     ))
 }
 
+/// A Lua string as text for a property, attribute or name. Roblox takes
+/// any bytes there (a script's `string.sub` can cut a name mid-character);
+/// rustudio's properties hold UTF-8, so the bytes that aren't are left out
+/// (estimate: what is read back never grows past what was set, so a
+/// shorten-until-it-fits loop still ends).
+pub fn lua_text(s: &mlua::String) -> String {
+    let b = s.as_bytes();
+    match std::str::from_utf8(&b) {
+        Ok(t) => t.to_owned(),
+        Err(_) => b.utf8_chunks().map(|c| c.valid()).collect(),
+    }
+}
+
 /// Converts a Lua value to a property's type. `existing` keeps the stored
 /// representation (Color3uint8 vs Color3).
 fn lua_to_variant(
@@ -1233,20 +1250,20 @@ fn lua_to_variant(
         VariantType::Float32 => Variant::Float32(number()? as f32),
         VariantType::Float64 => Variant::Float64(number()?),
         VariantType::String => match v {
-            Value::String(s) => Variant::String(s.to_str()?.to_string()),
+            Value::String(s) => Variant::String(lua_text(s)),
             Value::Number(n) => Variant::String(n.to_string()),
             Value::Integer(n) => Variant::String(n.to_string()),
             _ => return Err(bad_assign(prop, "string", v)),
         },
         VariantType::ContentId => match v {
-            Value::String(s) => Variant::ContentId(ContentId::from(s.to_str()?.to_string())),
+            Value::String(s) => Variant::ContentId(ContentId::from(lua_text(s))),
             Value::UserData(_) if opt_ud::<editable::LContent>(v).is_some() => Variant::ContentId(ContentId::from(
                 opt_ud::<editable::LContent>(v).and_then(|c| c.0.as_uri().map(str::to_string)).unwrap_or_default(),
             )),
             _ => return Err(bad_assign(prop, "string", v)),
         },
         VariantType::Content => match v {
-            Value::String(s) => Variant::Content(Content::from(s.to_str()?.to_string())),
+            Value::String(s) => Variant::Content(Content::from(lua_text(s))),
             Value::Nil => Variant::Content(Content::none()),
             Value::UserData(_) if opt_ud::<editable::LContent>(v).is_some() => {
                 opt_ud::<editable::LContent>(v).map(|c| c.variant()).unwrap_or(Variant::Content(Content::none()))
@@ -1352,7 +1369,7 @@ fn inst_meta(lua: &Lua, r: Ref) -> mlua::Result<(String, String, Ref)> {
         .d()
         .dom
         .get_by_ref(r)
-        .ok_or_else(|| rt_err("attempt to use an Instance that no longer exists"))?;
+        .ok_or_else(gone_err)?;
     Ok((i.class.to_string(), i.name.clone(), i.parent()))
 }
 
@@ -1363,8 +1380,12 @@ pub fn inst_class(lua: &Lua, r: Ref) -> mlua::Result<(rbx_dom_weak::Ustr, Ref)> 
         .d()
         .dom
         .get_by_ref(r)
-        .ok_or_else(|| rt_err("attempt to use an Instance that no longer exists"))?;
+        .ok_or_else(gone_err)?;
     Ok((i.class, i.parent()))
+}
+
+fn gone_err() -> mlua::Error {
+    rt_err("attempt to use an Instance that no longer exists")
 }
 
 /// What `inst.key` is for a class, as far as it depends only on the class:
@@ -1775,7 +1796,7 @@ fn index_entry_fast(lua: &Lua, r: Ref, key: &str, atom: i32) -> (mlua::Result<Fv
             .d()
             .dom
             .get_by_ref(r)
-            .ok_or_else(|| rt_err("attempt to use an Instance that no longer exists"))?;
+            .ok_or_else(gone_err)?;
         let class_u = i.class;
         let rt = routes::route(class_u, key, atom);
         let got = if rt.child_only {
@@ -3551,7 +3572,7 @@ fn newindex_routed(
     match key {
         "Name" => {
             let s = match &value {
-                Value::String(s) => s.to_str()?.to_string(),
+                Value::String(s) => lua_text(s),
                 Value::Number(n) => n.to_string(),
                 _ => return Err(bad_assign("Name", "string", &value)),
             };
@@ -4027,7 +4048,7 @@ fn arg_str(args: &MultiValue, i: usize, what: &str) -> mlua::Result<String> {
         // Studio's reflected string argument converts what it can
         // (GetService(true) is `'true' is not a valid Service name`,
         // GetService({}) `'{}' …`); only nil is missing.
-        Value::String(s) => Ok(s.to_str()?.to_string()),
+        Value::String(s) => Ok(lua_text(&s)),
         Value::Number(n) => Ok(n.to_string()),
         Value::Integer(n) => Ok(n.to_string()),
         Value::Boolean(b) => Ok(b.to_string()),
@@ -4704,7 +4725,7 @@ fn attribute_value(v: &Value) -> mlua::Result<Option<Variant>> {
         Value::Boolean(b) => Some(Variant::Bool(*b)),
         Value::Number(x) => Some(Variant::Float64(*x)),
         Value::Integer(i) => Some(Variant::Float64(*i as f64)),
-        Value::String(s) => Some(Variant::String(s.to_str()?.to_string())),
+        Value::String(s) => Some(Variant::String(lua_text(s))),
         _ => {
             if let Some(e) = opt_ud::<LEnumItem>(v) {
                 Some(Variant::EnumItem(rbx_dom_weak::types::EnumItem {
@@ -7698,6 +7719,54 @@ mod tests {
             rt.step(1.0 / 60.0);
         }
         rt.leave().output
+    }
+
+    /// Text cut mid-character by `string.sub` (a display name shortened to
+    /// fit) is taken where Roblox takes any bytes: the whole characters stay.
+    #[test]
+    fn properties_names_and_attributes_take_non_utf8_strings() {
+        let out = run(r#"
+            local bad = "abcdef\xE2\x80" .. "..."
+            local f = Instance.new("Folder", workspace)
+            local v = Instance.new("StringValue", f)
+            v.Value = bad
+            v.Name = bad
+            f:SetAttribute("a", bad)
+            print("utf8", v.Value, v.Name, f:GetAttribute("a"), f:FindFirstChild(bad) == v)
+        "#);
+        assert!(out.iter().any(|(_, t)| t.starts_with("utf8 abcdef... abcdef... abcdef... true")), "{out:?}");
+        assert!(out.iter().all(|(l, _)| *l != Level::Error), "{out:?}");
+    }
+
+    /// What the CoreScripts' voice manager and the menu's Respawn call:
+    /// AvatarChatService answers a client without voice (its engine feature
+    /// on), and BustAvatarFetchCache asks the host for the avatar again.
+    #[test]
+    fn avatar_chat_service_has_no_features_and_respawn_busts_the_avatar() {
+        let rt = Runtime::new().unwrap();
+        let mut w = World::new(Document::new_place(), RunMode::Play);
+        w.side = Side::Client;
+        rt.enter(w);
+        rt.bind_globals().unwrap();
+        let r = security::with_main_identity(&rt.lua, security::CORE, || {
+            rt.lua
+                .load(r#"
+                    local acs = game:GetService("AvatarChatService")
+                    local f = acs:GetClientFeaturesAsync()
+                    print("acs", game:GetEngineFeature("AvatarChatServiceEnabled"), f,
+                        acs:IsEnabled(f, Enum.AvatarChatServiceFeature.UserAudio),
+                        acs:IsEnabled(4 + 32, Enum.AvatarChatServiceFeature.UserAudio),
+                        acs.ClientFeaturesInitialized, acs.ClientFeatures,
+                        #game:GetService("VideoCaptureService"):GetCameraDevices())
+                    game:GetService("AvatarEditorService"):BustAvatarFetchCache()
+                "#)
+                .set_name("=core")
+                .exec()
+        });
+        assert!(r.is_ok(), "{r:?}");
+        assert!(rt.world_mut().unwrap().avatar_fetch_busted);
+        let out = rt.leave().output;
+        assert!(out.iter().any(|(_, t)| t.starts_with("acs true 0 false true true 0 0")), "{out:?}");
     }
 
     #[test]

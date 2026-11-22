@@ -2989,11 +2989,23 @@ impl Game {
         let Some(mode) = self.play.as_ref().map(|p| p.mode) else {
             return true;
         };
+        // A script's AvatarEditorService:BustAvatarFetchCache (the menu's
+        // Respawn): the account fetches the avatar again.
+        let mut busted = false;
+        if let Some(s) = self.play.as_mut() {
+            for w in [s.server.as_mut().and_then(|server| server.world.as_mut()), s.client.as_mut().and_then(|c| c.world.as_mut())].into_iter().flatten() {
+                busted |= std::mem::take(&mut w.avatar_fetch_busted);
+            }
+        }
+        if busted {
+            self.account.refetch_avatar();
+        }
         // An avatar that arrived after Play started (it wasn't waited for:
-        // CharacterAutoLoads off) is the next LoadCharacter's.
+        // CharacterAutoLoads off, or fetched again) is the next LoadCharacter's.
+        let new = self.account.take_new_avatar();
         if let (Some(look), Some(s)) = (self.account.avatar(), self.play.as_mut()) {
             for w in [s.server.as_mut().and_then(|server| server.world.as_mut()), s.client.as_mut().and_then(|c| c.world.as_mut())].into_iter().flatten() {
-                if w.avatar.is_none() {
+                if new || w.avatar.is_none() {
                     w.avatar = Some(look.clone());
                 }
             }
