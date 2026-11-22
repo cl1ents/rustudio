@@ -437,3 +437,9 @@ set Font back; `<stroke>` rich text tags are read but not drawn.
 4. ~~GuiService.MenuOpened / MenuClosed with an in-game Esc menu~~ (round 13).
 5. Gamepad input (GamepadConnected / Disconnected, gamepad KeyCodes).
 6. The rest of `missing_game_members_by_class` in the coverage report.
+7. ~~Message / Hint drew nothing~~ (place 2828's regen scripts show
+   "Regenerating …" with one): drawn as Studio 0.747's `Message::render2d` /
+   `Hint::render2d` do (MECHANICS.md, GUI).
+8. Model / BasePart `MakeJoints` is a no-op (Roblox makes Snap / Weld joints
+   from touching parts' SurfaceTypes); joints saved in a model still load as
+   instances.

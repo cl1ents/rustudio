@@ -1738,10 +1738,25 @@ impl Physics {
         // (Sets are walked in ref order: with RUSTUDIO_DETERMINISTIC refs follow
         // creation order, and rapier's arena indices — the solver's body and contact
         // order — come out the same on every run.)
-        let mut stack: Vec<Ref> = seeds.into_iter().collect();
+        let mut stack: Vec<Ref> = seeds.iter().copied().collect();
         stack.sort_unstable_by_key(|r| rbx_dom_weak::ref_order(*r));
+        // A part that is anchored itself (or that another simulation moves)
+        // and already a fixed collider is rebuilt with its seed neighbours
+        // (they group with it) but not walked past: whatever else is joined
+        // to it was fixed by it and stays so. A classic place's map is one
+        // web of Snaps and Welds through its Baseplate (place 2828's: 1603
+        // parts); a regenerated model welded to that web made the walk
+        // rebuild every collider of the map.
+        let fixed_alone = |r: Ref| {
+            !seeds.contains(&r)
+                && self.parts.get(&r).is_some_and(|p| p.asm.is_none())
+                && (self.external.contains(&r) || matches!(doc.prop(r, "Anchored"), Some(Variant::Bool(true))))
+        };
         while let Some(r) = stack.pop() {
             if !all.insert(r) {
+                continue;
+            }
+            if fixed_alone(r) {
                 continue;
             }
             if let Some(id) = self.parts.get(&r).and_then(|p| p.asm) {
@@ -1752,6 +1767,7 @@ impl Physics {
             stack.extend(self.neighbours(r));
         }
         drop(b1);
+        rustudio_core::bench::add("pb_parts", 0.0, all.len() as u64);
         let b2 = rustudio_core::bench::scope("pb_drop");
         // 2. Drop what's there now.
         let mut all: Vec<Ref> = all.into_iter().collect();
@@ -3345,6 +3361,21 @@ impl Physics {
         self.by_collider.insert(handle, part);
         if self.touch_parts.is_some() && !self.touch_refresh {
             self.touch_pending.push(handle);
+        }
+        // Into the query tree now, as Roblox does: Studio 0.747
+        // `ContactManager::onAssemblyAdded` (0x100275f5e) binds a new assembly
+        // into the broad phase at once, and the Humanoid's floor rays
+        // (`ControllerPartSensor::findFloorRaycast`, 0x100cb233c, through
+        // `ContactManager::raycastBatched`) query it the same frame. rapier's
+        // broad phase would only add it at the next step: a map regen's fresh
+        // ground went unseen for a frame and the character fell. The world's
+        // first build is indexed by its first step as a whole.
+        if self.steps > 0 {
+            let w = &mut self.world;
+            if let Some(co) = w.colliders.get(handle) {
+                let aabb = co.compute_broad_phase_aabb(&w.integration_parameters, &w.bodies);
+                w.broad_phase.set_aabb(&w.integration_parameters, handle, aabb);
+            }
         }
     }
 
@@ -5134,6 +5165,30 @@ mod tests {
     }
 
     #[test]
+    fn part_added_under_a_standing_humanoid_holds_it_at_once() {
+        // A map regen (place 2828) parents fresh ground under the character.
+        // Roblox's spatial queries see a part the frame it is parented, so the
+        // floor rays find it before the world steps again. (A new collider's
+        // slot is not in rapier's query tree until a step: the rays looked
+        // through it to whatever was below, or at nothing, and the character
+        // fell for a frame.)
+        let (mut doc, mut p) = hum_world(vec![]);
+        run(&mut p, &mut doc, 3);
+        let ws = doc.workspace().unwrap();
+        let slab = doc.dom.insert(
+            ws,
+            part("Slab", Vec3::new(0.0, 0.25, 0.0), true).with_property("Size", Vector3::new(20.0, 0.5, 20.0)),
+        );
+        doc.mark_tree(slab);
+        p.sync(&mut doc);
+        let sh = hum_shape_r15();
+        let root = Vec3::Y * (0.5 + sh.hip + sh.root_size.y * 0.5);
+        let floor = p.find_floor(root, Quat::IDENTITY, &sh, true, &HashSet::<Ref>::default()).expect("a floor");
+        assert_eq!(floor.part, Some(slab), "the floor rays find the part parented this frame");
+        assert!((floor.y - 0.5).abs() < 1e-3, "on the slab's top, not the floor below: {}", floor.y);
+    }
+
+    #[test]
     fn prepared_studio_step_publishes_only_at_completion() {
         let fixture = || hum_world(vec![part("Block", Vec3::Y * 100.0, false)]);
         let (mut doc, mut physics) = fixture();
@@ -6192,6 +6247,53 @@ mod tests {
             .with_property("Attachment0", a0).with_property("Attachment1", a1));
         let p = Physics::new(&mut doc);
         assert_eq!(p.counts().0, 1, "one assembly");
+    }
+
+    /// A model welded to an anchored map (a regenerated model, place 2828)
+    /// rebuilds the new parts and the anchored part they join, not the
+    /// whole web of anchored parts welded to it; a loose part welded to the
+    /// map stays fixed and one welded to the new part is fixed by it.
+    #[test]
+    fn welding_to_an_anchored_web_rebuilds_only_its_edge() {
+        let mut doc = Document::new_place();
+        let ws = doc.workspace().unwrap();
+        let chain: Vec<Ref> = (0..20)
+            .map(|i| doc.dom.insert(ws, part(&format!("M{i}"), Vec3::new(2.0 * i as f32, 30.0, 0.0), true)))
+            .collect();
+        for w in chain.windows(2) {
+            doc.dom.insert(w[0], InstanceBuilder::new("WeldConstraint").with_property("Part0", w[0]).with_property("Part1", w[1]));
+        }
+        let loose = doc.dom.insert(ws, part("Loose", Vec3::new(40.0, 30.0, 0.0), false));
+        doc.dom.insert(loose, InstanceBuilder::new("WeldConstraint").with_property("Part0", chain[19]).with_property("Part1", loose));
+        let mut p = Physics::new(&mut doc);
+        run(&mut p, &mut doc, 2);
+        let collider = |p: &Physics, r: Ref| p.parts[&r].collider;
+        let far = collider(&p, chain[10]);
+        let loose_before = collider(&p, loose);
+        // The regenerated model: a part welded to the map's first part, and
+        // an unanchored one welded to it.
+        let new = doc.dom.insert(ws, part("New", Vec3::new(-2.0, 30.0, 0.0), true));
+        let hang = doc.dom.insert(ws, part("Hang", Vec3::new(-4.0, 30.0, 0.0), false));
+        let j1 = doc.dom.insert(new, InstanceBuilder::new("WeldConstraint").with_property("Part0", new).with_property("Part1", chain[0]));
+        let j2 = doc.dom.insert(new, InstanceBuilder::new("WeldConstraint").with_property("Part0", new).with_property("Part1", hang));
+        for r in [new, hang, j1, j2] {
+            doc.mark_tree(r);
+        }
+        p.sync(&mut doc);
+        assert_eq!(collider(&p, chain[10]), far, "the rest of the map keeps its colliders");
+        assert_eq!(collider(&p, loose), loose_before, "so does what hangs off it");
+        assert!(p.parts[&new].asm.is_none() && p.parts[&hang].asm.is_none(), "the new parts are fixed");
+        assert_eq!(p.counts().0, 0, "nothing simulated");
+        // Unanchoring the new part: Hang still hangs off the map through it.
+        doc.set_prop_live(new, ustr("Anchored"), Variant::Bool(false));
+        p.sync(&mut doc);
+        assert!(p.parts[&new].asm.is_none() && p.parts[&hang].asm.is_none(), "held by the map");
+        // The weld to the map gone: New and Hang fall together.
+        doc.dom.transfer_within(j1, Ref::none());
+        doc.mark_tree(j1);
+        p.sync(&mut doc);
+        assert_eq!(p.counts().0, 1, "New and Hang are one loose assembly");
+        assert_eq!(collider(&p, chain[10]), far, "the map still untouched");
     }
 }
 
