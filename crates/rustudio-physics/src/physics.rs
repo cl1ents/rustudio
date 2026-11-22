@@ -2098,6 +2098,19 @@ impl Physics {
             if !seen.insert(c) || !self.parts.get(&s).is_some_and(|pb| pb.asm.is_none()) {
                 continue;
             }
+            // Most client marks are the server's own moves arriving in the
+            // client's copy: the same CFrame and Size values, bit for bit,
+            // with nothing followed to undo. Compared in place, before
+            // reading both parts' whole signatures (`part_sig`).
+            fn raw<'a>(d: &'a Document, r: Ref, k: &rbx_dom_weak::Ustr) -> Option<&'a Variant> {
+                d.dom.get_by_ref(r).and_then(|i| i.properties.get(k))
+            }
+            if !self.client_over.contains_key(&s)
+                && raw(client, c, &cframe) == raw(server, s, &cframe)
+                && raw(client, c, &size) == raw(server, s, &size)
+            {
+                continue;
+            }
             let (Some((cx, csig)), Some((sx, ssig))) = (part_sig(client, c), part_sig(server, s)) else {
                 continue;
             };
