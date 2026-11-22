@@ -280,6 +280,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("GetKeysPressed", "UserInputService"),
     ("IsLoaded", "DataModel"),
     ("BindToClose", "DataModel"),
+    ("Shutdown", "DataModel"),
     ("SetCoreGuiEnabled", "StarterGui"),
     ("GetCoreGuiEnabled", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -4809,6 +4810,14 @@ fn call_inner(lua: &Lua, name: &str, this: Ref, args: &MultiValue, domains: u16)
     match name {
         "BreakJoints" => {
             break_joints(lua, this)?;
+            none()
+        }
+        // DataModel:Shutdown (LocalUserSecurity, api-dump.json): the
+        // CoreScripts menu's Leave (Modules/InGameMenu/Utility/LeaveGame,
+        // Settings LeaveGame page) calls it to leave the game; the host ends
+        // the session the next step.
+        "Shutdown" => {
+            world(lua)?.shutdown_requested = true;
             none()
         }
         "MakeJoints"

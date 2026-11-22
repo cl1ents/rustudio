@@ -2991,11 +2991,14 @@ impl Game {
             return true;
         };
         // A script's AvatarEditorService:BustAvatarFetchCache (the menu's
-        // Respawn): the account fetches the avatar again.
+        // Respawn): the account fetches the avatar again. A script's
+        // DataModel:Shutdown (the CoreScripts menu's Leave) ends the session.
         let mut busted = false;
+        let mut shutdown = false;
         if let Some(s) = self.play.as_mut() {
             for w in [s.server.as_mut().and_then(|server| server.world.as_mut()), s.client.as_mut().and_then(|c| c.world.as_mut())].into_iter().flatten() {
                 busted |= std::mem::take(&mut w.avatar_fetch_busted);
+                shutdown |= std::mem::take(&mut w.shutdown_requested);
             }
         }
         if busted {
@@ -3021,7 +3024,7 @@ impl Game {
         let dt = elapsed;
         // The in-game menu's Leave stops the session; Reset Character kills
         // the character on the server (Humanoid.Health = 0, as Roblox does).
-        if self.play.as_ref().is_some_and(|s| s.game.leave_request) {
+        if shutdown || self.play.as_ref().is_some_and(|s| s.game.leave_request) {
             self.stop_play(host);
             return true;
         }

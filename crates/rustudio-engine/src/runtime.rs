@@ -197,6 +197,8 @@ pub struct World {
     /// AvatarEditorService:BustAvatarFetchCache was called: the host fetches
     /// the avatar again (the next character and `avatar` get the new one).
     pub avatar_fetch_busted: bool,
+    /// DataModel:Shutdown (the menu's Leave): the host ends the session.
+    pub shutdown_requested: bool,
     /// Instances with at least one connection or waiter (fires on others are dropped early).
     pub listening: rustc_hash::FxHashSet<Ref>,
     /// Instances something ever connected to (or waited on) for a touch event
@@ -672,6 +674,7 @@ impl World {
             avatar: None,
             avatar_descs: HashSet::new(),
             avatar_fetch_busted: false,
+            shutdown_requested: false,
             listening: Default::default(),
             touch_refs: Default::default(),
             touch_rev: 0,
@@ -7767,6 +7770,27 @@ mod tests {
         assert!(rt.world_mut().unwrap().avatar_fetch_busted);
         let out = rt.leave().output;
         assert!(out.iter().any(|(_, t)| t.starts_with("acs true 0 false true true 0 0")), "{out:?}");
+    }
+
+    /// The CoreScripts menu's Leave calls DataModel:Shutdown (LocalUser
+    /// security): it asks the host to end the session; a game script can't.
+    #[test]
+    fn menu_leave_shutdown_asks_the_host_to_end_play() {
+        let rt = Runtime::new().unwrap();
+        let mut w = World::new(Document::new_place(), RunMode::Play);
+        w.side = Side::Client;
+        rt.enter(w);
+        rt.bind_globals().unwrap();
+        let game = security::with_main_identity(&rt.lua, security::GAME, || {
+            rt.lua.load("game:Shutdown()").set_name("=game").exec()
+        });
+        assert!(game.is_err());
+        assert!(!rt.world_mut().unwrap().shutdown_requested);
+        let core = security::with_main_identity(&rt.lua, security::CORE, || {
+            rt.lua.load("game:Shutdown()").set_name("=core").exec()
+        });
+        assert!(core.is_ok(), "{core:?}");
+        assert!(rt.world_mut().unwrap().shutdown_requested);
     }
 
     #[test]
