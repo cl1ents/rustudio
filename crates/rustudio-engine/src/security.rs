@@ -1095,4 +1095,29 @@ mod tests {
         assert_eq!(rule("Player", "InputLatency").unwrap().read.missing(COMMAND), Some("RobloxEngine"));
         assert_eq!(rule("Instance", "SourceAssetId").unwrap().read.missing(COMMAND), Some("RobloxScript"));
     }
+
+    /// A bound action runs at its binder's identity whatever thread the
+    /// input arrives on: the in-game menu's Escape (a CoreScript's
+    /// BindCoreAction) reads GuiService.SelectedCoreObject (RobloxScript).
+    #[test]
+    fn bound_action_runs_at_its_binders_identity() {
+        let (rt, _) = client("");
+        with_main_identity(&rt.lua, CORE, || {
+            rt.lua.load(r#"
+                game:GetService("ContextActionService"):BindCoreAction("T", function(_, state)
+                    if state == Enum.UserInputState.Begin then
+                        local ok = pcall(function() return game:GetService("GuiService").SelectedCoreObject end)
+                        print(if ok then "core read" else "core denied")
+                    end
+                end, false, Enum.KeyCode.Escape)
+            "#).set_name("=core").exec()
+        })
+        .unwrap();
+        with_main_identity(&rt.lua, GAME, || {
+            rt.lua.load(r#"__rs_input_event("Begin", "Keyboard", "Escape", 0, 0, 0, 0, 0, false)"#).set_name("=input").exec()
+        })
+        .unwrap();
+        let out = lines(rt);
+        assert!(has(&out, "core read"), "{out:?}");
+    }
 }

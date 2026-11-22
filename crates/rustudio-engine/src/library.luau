@@ -835,9 +835,23 @@ local function action_matches(k, input)
     end
     return false
 end
+-- An action runs at the identity of the thread that bound it, as signal
+-- handlers do (the menu's Escape, a CoreScript's, reads
+-- GuiService.SelectedCoreObject, RobloxScript).
 local function bind(name, fn, touch, priority, ...)
     action_seq += 1
-    actions[name] = { name = name, fn = fn, inputs = { ... }, priority = priority, seq = action_seq, touch = touch }
+    actions[name] = { name = name, fn = fn, inputs = { ... }, priority = priority, seq = action_seq, touch = touch, ident = sig_identity() }
+end
+-- One action's handler at its binder's identity: (ok, result). One that
+-- yields has no result yet: nil, which sinks the input (estimate: Roblox
+-- documents a handler returning nothing as Sink, not one that yields).
+local function call_action(a, state, input)
+    local out
+    sig_spawn_as(a.ident, function()
+        out = table.pack(pcall(a.fn, a.name, state, input))
+    end)
+    if not out then return true, nil end
+    return out[1], out[2]
 end
 -- The CoreScripts' own actions (BindCoreAction, RobloxScriptSecurity): a
 -- stack of their own ahead of every game action, so the menu's Escape and
@@ -913,7 +927,7 @@ local function run_actions(input, state)
     local got, sunk = {}, false
     for _, e in list do
         if actions[e.name] == e.a then
-            local ok, r = pcall(e.a.fn, e.a.name, state, input)
+            local ok, r = call_action(e.a, state, input)
             if not ok then
                 task.spawn(error, r, 0)
             end
