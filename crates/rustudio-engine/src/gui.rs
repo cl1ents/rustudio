@@ -991,7 +991,7 @@ fn point_in_quad(q: &[Pos2; 4], p: Pos2) -> bool {
 
 /// Enum.Font → (family file, weight, italic), as Font.fromEnum maps them
 /// (Gotham is Montserrat in current Studio's content folder).
-fn legacy_font(name: &str) -> (String, u32, bool) {
+pub(crate) fn legacy_font(name: &str) -> (String, u32, bool) {
     let f = |fam: &str, w: u32, i: bool| (format!("rbxasset://fonts/families/{fam}.json"), w, i);
     match name {
         "Legacy" => f("LegacyArial", 400, false),

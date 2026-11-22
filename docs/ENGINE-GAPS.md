@@ -405,14 +405,24 @@ Look (round 3, compared with the real client's captures):
   outline copies share the stroke's alpha (mech GUI_TEXT_STROKE_OVERLAP).
 - A row's flex-grown items that grow on Y are as tall as they are at their
   new width (the chat input grew to 182 px while typing).
+- An AutomaticSize X object's children measure with the room it can grow
+  into (the Help tab's key column, AutomaticSize XY frames 0 wide around
+  wrapped "Up arrow", wrapped a letter per line).
+- TextFits before the first layout measures TextBounds against the box
+  (SettingsHub's version footer turned TextScaled on and drew over itself).
+- Setting Font sets FontFace to Font.fromEnum of it, and Font.fromEnum maps
+  as Roblox's does (BuilderSansMedium → BuilderSans Medium, Gotham →
+  GothamSSm): the settings rows set Font = BuilderSans and drew in
+  LegacyArial at its 1.5× size. Section headers are text-heading-small
+  (Builder Sans Bold 25, the Foundation token) in content-emphasis white.
 
 Still open: the Respawn confirmation page draws its text tiny (its confirm
 button not yet verified); VoiceChatCore.CoreVoiceManager:680 indexes a nil
 service (AvatarChatService behind an engine feature, which reads false).
-TextService:GetTextSizeOffsetAsync is still a stub. The Help tab's key
-column wraps a character per line and the version footer overlaps itself;
-the Settings tab's section headers are not yet compared with Roblox's;
-`<stroke>` rich text tags are read but not drawn.
+TextService:GetTextSizeOffsetAsync is still a stub. The Help tab wraps
+"Drop tool", "Use tool" and "Mouse lock" (Roblox doesn't) and its Camera
+movement / Menu items groups are not on screen; setting FontFace doesn't
+set Font back; `<stroke>` rich text tags are read but not drawn.
 
 ## Next (open, by how much they block real games)
 

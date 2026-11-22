@@ -4573,21 +4573,23 @@ pub fn install_font(lua: &Lua, g: &Table) -> LResult<()> {
     t.set(
         "fromEnum",
         lua.create_function(|_, e: Value| {
-            // Enum.Font items name their family (Enum.Font.Oswald → Oswald.json).
+            // Roblox's Font.fromEnum table (gui.rs `legacy_font`):
+            // BuilderSansMedium → BuilderSans.json Medium, SourceSansSemibold
+            // → SourceSansPro SemiBold, Legacy → LegacyArial; Gotham faces
+            // name GothamSSm.json as Roblox's do (drawn as Montserrat).
             let name = ud::<LEnumItem>(&e)
                 .map(|i| i.name)
-                .unwrap_or_else(|| "SourceSansPro".into());
-            let (family, bold) = match name.strip_suffix("Bold") {
-                Some(base) if !base.is_empty() => (base.to_string(), true),
-                _ => (name, false),
+                .unwrap_or_else(|| "SourceSans".into());
+            let (family, weight, italic) = crate::gui::legacy_font(&name);
+            let family = if family.ends_with("/Montserrat.json") && name.starts_with("Gotham") {
+                "rbxasset://fonts/families/GothamSSm.json".to_string()
+            } else {
+                family
             };
-            let mut f = font_from_parts(
-                format!("rbxasset://fonts/families/{family}.json"),
-                None,
-                None,
-            )?;
-            if bold {
-                f.0.weight = rbx_types::FontWeight::Bold;
+            let mut f = font_from_parts(family, None, None)?;
+            f.0.weight = rbx_types::FontWeight::from_u16(weight as u16).unwrap_or_default();
+            if italic {
+                f.0.style = rbx_types::FontStyle::Italic;
             }
             Ok(f)
         })?,

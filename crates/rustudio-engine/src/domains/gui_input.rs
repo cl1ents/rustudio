@@ -346,6 +346,9 @@ const LUA_WRITES: &[(&str, &str)] = &[
     ("InputAction", "Type"),
     ("InputAction", "Enabled"),
     ("InputContext", "Enabled"),
+    ("TextLabel", "Font"),
+    ("TextButton", "Font"),
+    ("TextBox", "Font"),
 ];
 
 fn lua_write(class: &str, key: &str) -> Option<&'static str> {

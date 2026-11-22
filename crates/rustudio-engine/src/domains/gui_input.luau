@@ -597,11 +597,31 @@ end
 for _, c in { "TextLabel", "TextButton", "TextBox" } do
     get[c .. ".ContentText"] = content
     get[c .. ".OpenTypeFeaturesError"] = function() return "" end
-    -- Fits when its text was drawn inside its box last frame.
+    -- Fits when its text was drawn inside its box last frame; not drawn yet,
+    -- its TextBounds measured now against its box (SettingsHub's version
+    -- footer reads TextFits right after making each label and turns
+    -- TextScaled on when it is false: the footer drew huge, over itself).
     get[c .. ".TextFits"] = function(o)
         local x, y, w, h, _, _, tw, th = G.layout(o)
-        if x == nil or tw < 0 then return false end
+        if x == nil or tw < 0 then
+            local b, s = o.TextBounds, o.AbsoluteSize
+            return b.X <= s.X + 0.5 and b.Y <= s.Y + 0.5
+        end
         return tw <= w + 0.5 and th <= h + 0.5
+    end
+    -- Setting Font sets FontFace to Font.fromEnum of it, as Roblox keeps
+    -- the two together (the settings menu's rows set Font =
+    -- Enum.Font.BuilderSans over the default FontFace, and drew in
+    -- LegacyArial at its 1.5× size). Font is stored as usual too.
+    set[c .. ".Font"] = function(o, _, v)
+        if type(v) == "string" then
+            local ok, e = pcall(function() return Enum.Font[v] end)
+            v = ok and e or nil
+        end
+        if typeof(v) == "EnumItem" and string.sub(tostring(v), 1, 10) == "Enum.Font." and v ~= Enum.Font.Unknown then
+            pcall(function() o.FontFace = Font.fromEnum(v) end)
+        end
+        return false
     end
 end
 get["TextLabel.LocalizedText"] = function(o) return o.Text end

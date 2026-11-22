@@ -829,6 +829,15 @@ impl<M: AutoText> Sizer<'_, M> {
             Pos2::ZERO,
             egui::vec2((size.x - pl - pr).max(0.0), (size.y - pt - pb).max(0.0)),
         );
+        // Growing on X, its children measure with the room it can grow
+        // into, not its own (often 0) width: Roblox's Help tab nests
+        // AutomaticSize XY frames 0 wide around wrapped "Up arrow", which
+        // wrapped a letter per line.
+        let room_inner = if auto & 1 != 0 && room.is_finite() {
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(inner.width().max(room - pl - pr), inner.height()))
+        } else {
+            inner
+        };
         let mut ext = egui::Vec2::ZERO;
         if d.class_of(r)
             .is_some_and(|c| matches!(c.as_str(), "TextLabel" | "TextButton" | "TextBox"))
@@ -864,7 +873,7 @@ impl<M: AutoText> Sizer<'_, M> {
                     inner.width()
                 } + p[1] * scale;
             let mut sizes: Vec<egui::Vec2> =
-                kids.iter().map(|k| self.auto_child_size(*k, inner, scale, auto, depth + 1)).collect();
+                kids.iter().map(|k| self.auto_child_size(*k, inner, room_inner, scale, auto, depth + 1)).collect();
             // A row that isn't growing on X fills its width as `children`
             // lays it out: the items that flex wider are as tall as they
             // are at their new width.
@@ -929,7 +938,7 @@ impl<M: AutoText> Sizer<'_, M> {
             }
         } else {
             for k in kids {
-                let s = self.auto_child_size(k, inner, scale, auto, depth + 1);
+                let s = self.auto_child_size(k, inner, room_inner, scale, auto, depth + 1);
                 let p = udim2(d, k, "Position");
                 let anchor = vec2(d, k, "AnchorPoint", [0.0, 0.0]);
                 let at = egui::vec2(
@@ -949,8 +958,19 @@ impl<M: AutoText> Sizer<'_, M> {
     /// Archimedes' window (an AutomaticSize Y button whose content sits in a
     /// `UDim2.new(1, 0, 1, -20)` frame: Studio shows the whole panel,
     /// checks/plugins/ref/corpus/screens/archimedes-click-main.jpg).
-    pub(super) fn auto_child_size(&mut self, k: Ref, inner: Rect, scale: f32, auto: u32, depth: usize) -> egui::Vec2 {
-        let mut s = self.own_size(k, inner, scale, depth);
+    /// `room_inner`: `inner` as wide as the parent can grow (children sized
+    /// by Scale on X still take `inner`).
+    pub(super) fn auto_child_size(
+        &mut self,
+        k: Ref,
+        inner: Rect,
+        room_inner: Rect,
+        scale: f32,
+        auto: u32,
+        depth: usize,
+    ) -> egui::Vec2 {
+        let base = if udim2(self.d, k, "Size")[0] != 0.0 { inner } else { room_inner };
+        let mut s = self.own_size(k, base, scale, depth);
         if depth >= 8 {
             return s;
         }
