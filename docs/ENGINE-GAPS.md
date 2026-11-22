@@ -342,7 +342,7 @@ backend, each noted in the code):
 - Rendering: CoreGui ScreenGuis (also inside Folders) draw above PlayerGui;
   GSUB ligatures for icon fonts; rbxasset:// reaches Studio's ExtraContent.
 
-Live client flags (crates/rustudio-core/src/client_flags.rs): Play loads
+Client flags (crates/rustudio-core/src/client_flags.rs): Play loads
 Roblox's public PCDesktopClient settings (25 850 flags) and the CoreScripts
 take today's variants. With all of them, on a TextChatService copy of the
 control place, StarterScript and the CoreScripts start with no error in

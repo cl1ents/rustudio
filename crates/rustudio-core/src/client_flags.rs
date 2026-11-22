@@ -1,4 +1,4 @@
-//! Roblox's live client fast flags, for the CoreScripts (core_scripts.rs).
+//! Roblox's published client fast flags, for the CoreScripts (core_scripts.rs).
 //!
 //! The CoreScripts choose their UI by fast flags (DataModel:GetFastFlag /
 //! DefineFastFlag, settings():GetFFlag): the top bar, the in-game menu and
@@ -196,7 +196,7 @@ mod tests {
         "FFlagTopBarUseNewBadge": "True",
         "DFFlagOnlyDynamic": "False",
         "FFlagFiltered": "False",
-        "FFlagFiltered_PlaceFilter": "True;189707;920587237",
+        "FFlagFiltered_PlaceFilter": "True;1818;920587237",
         "DFIntSomeRolloutPermille": "250",
         "FStringGreeting": "hello;world",
         "FIntNotANumber": "x"
@@ -209,7 +209,7 @@ mod tests {
         // The D-prefixed name answers when the plain one is missing.
         assert_eq!(f.flag("OnlyDynamic", 1), Some(false));
         // A place filter applies only in its places.
-        assert_eq!(f.flag("Filtered", 189707), Some(true));
+        assert_eq!(f.flag("Filtered", 1818), Some(true));
         assert_eq!(f.flag("Filtered", 920587237), Some(true));
         assert_eq!(f.flag("Filtered", 1), Some(false));
         assert_eq!(f.int("SomeRolloutPermille", 1), Some(250));
