@@ -29,8 +29,7 @@
 //! `CoreGui.RobloxGui.CoreScripts/<Name>`, while the engine-started scripts
 //! report bare chunk names (`Script 'StarterScript'`, `'LoadingScript'`,
 //! `'Connection'`), and CoreScripts look up `CoreGui.CoreScriptLocalization`
-//! (devforum.roblox.com/t/2659679 and /t/2584693; Studio's binary has
-//! "LocalizationService: CoreScriptLocalization missing from DataModelPatch").
+//! (devforum.roblox.com/t/2659679 and /t/2584693).
 //! A Folder in `DataModelInstances` names the instance at its path (the
 //! CoreGui and CorePackages services, the engine's RobloxGui ScreenGui:
 //! StarterScript waits for `CoreGui.RobloxGui` and reads its
@@ -220,8 +219,8 @@ fn named(dom: &WeakDom, parent: Ref, name: &str) -> Option<Ref> {
 /// `PatchRoot.CoreScripts` aside by name.
 pub fn install(doc: &mut Document, mut patch: Patch) -> Result<Installed, String> {
     let patch_root = named(&patch.dom, patch.dom.root_ref(), "PatchRoot").ok_or("the patch has no PatchRoot")?;
-    // (Studio's patcher falls back to the root without DataModelInstances:
-    // "no DataModelInstances child in patch root, trying root directly".)
+    // (A patch without DataModelInstances: its root's children stand for
+    // the services.)
     let instances = named(&patch.dom, patch_root, "DataModelInstances").unwrap_or(patch_root);
     let root = doc.dom.root_ref();
     let service = |doc: &mut Document, class: &str| {
