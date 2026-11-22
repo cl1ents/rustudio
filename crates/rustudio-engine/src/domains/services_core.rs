@@ -225,6 +225,58 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
             }
             Ok(MultiValue::from_iter([inst_value(lua, top)?]))
         }
+        // The size text takes (wrapped at frameSize.X): rustudio's own
+        // text layout, as GUI objects measure their TextBounds. Before any
+        // GUI text was drawn there are no font metrics yet: one line of
+        // TextSize per char-height (estimate).
+        "GetTextSize" => {
+            let text = name_arg(args, name)?;
+            let size = match arg(args, 2) {
+                Value::Integer(i) => i as f32,
+                Value::Number(n) => n as f32,
+                _ => return Err(rt_err("GetTextSize: Argument 2 missing or nil")),
+            };
+            let font = match arg(args, 3) {
+                v => match crate::ltypes::enum_arg(Some(&v), "Font", "SourceSans") {
+                    Ok(e) => crate::gui::face_of_legacy(&e.name),
+                    Err(e) => return Err(e),
+                },
+            };
+            let width = match opt_ud::<crate::ltypes::LVector2>(&arg(args, 4)) {
+                Some(v) => v.0.x,
+                None => f32::INFINITY,
+            };
+            let m = crate::gui::measure_plain(&text, &font, size, width).unwrap_or([text.chars().count() as f32 * size * 0.5, size]);
+            Ok(MultiValue::from_iter([Value::UserData(lua.create_userdata(crate::ltypes::LVector2(glam::Vec2::new(m[0], m[1])))?)]))
+        }
+        // GetTextBoundsParams: Text, Font, Size, Width (and RichText).
+        "GetTextBoundsAsync" => {
+            let Value::UserData(p) = arg(args, 1) else { return Err(rt_err("GetTextBoundsAsync: Argument 1 missing or nil")) };
+            let get = |k: &str| -> mlua::Result<Value> {
+                let t: mlua::Function = lua.load("return function(p, k) return p[k] end").eval()?;
+                t.call((Value::UserData(p.clone()), k))
+            };
+            let text = match get("Text")? {
+                Value::String(s) => s.to_str()?.to_string(),
+                _ => String::new(),
+            };
+            let size = match get("Size")? {
+                Value::Integer(i) => i as f32,
+                Value::Number(n) => n as f32,
+                _ => 14.0,
+            };
+            let width = match get("Width")? {
+                Value::Integer(i) => i as f32,
+                Value::Number(n) => n as f32,
+                _ => f32::INFINITY,
+            };
+            let font = match opt_ud::<crate::ltypes::LFont>(&get("Font")?) {
+                Some(f) => crate::gui::face_of_font(&f.0),
+                None => crate::gui::face_of_legacy("SourceSans"),
+            };
+            let m = crate::gui::measure_plain(&text, &font, size, width).unwrap_or([text.chars().count() as f32 * size * 0.5, size]);
+            Ok(MultiValue::from_iter([Value::UserData(lua.create_userdata(crate::ltypes::LVector2(glam::Vec2::new(m[0], m[1])))?)]))
+        }
         "AddCoreScriptLocal" => {
             let script = name_arg(args, name)?;
             let parent = opt_inst(&arg(args, 2)).ok_or_else(|| rt_err("AddCoreScriptLocal: Argument 2 missing or nil"))?;

@@ -254,6 +254,9 @@ pub const METHODS: &[(&str, &str)] = &[
     ("LogStat", "TelemetryService"),
     ("LogDurationEvent", "TelemetryService"),
     ("LogDurationEventWithTimestamp", "TelemetryService"),
+    ("GetTextSizeOffsetAsync", "TextService"),
+    ("GetTextSize", "TextService"),
+    ("GetTextBoundsAsync", "TextService"),
     ("RegisterSetCore", "StarterGui"),
     ("RegisterGetCore", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -594,6 +597,7 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("RbxAnalyticsService" | "IXPService" | "MemStorageService" | "MemStorageConnection" | "NotificationService" | "ThirdPartyUserService" | "AdService" | "AvatarChatService" | "AchievementService" | "EventIngestService", _)
         | ("Animator", "GetPlayingAnimationTracksCoreScript")
         | ("HttpService", "RequestInternal" | "GetUserAgent")
+        | ("TextService", "GetTextSizeOffsetAsync" | "GetTextSize" | "GetTextBoundsAsync")
         | ("LinkingService" | "AudioFocusService" | "SessionService" | "ExperienceService" | "TelemetryService", _)
         | ("HttpRequest", _)
         | ("CaptureService", _)

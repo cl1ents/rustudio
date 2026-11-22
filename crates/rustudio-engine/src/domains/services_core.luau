@@ -581,4 +581,13 @@ for _, n in { "LogEvent", "LogCounter", "LogStat", "LogDurationEvent", "LogDurat
 	M["TelemetryService." .. n] = function() end
 end
 
+------------------------------------------------------------ TextService
+-- The TextSize offset the player's preferred text size adds (GuiService.
+-- PreferredTextSize): rustudio's is Medium, which adds none (estimate: the
+-- offsets of the larger sizes aren't measured).
+M["TextService.GetTextSizeOffsetAsync"] = function(self, size)
+	if tonumber(size) == nil then fail("Argument 1 missing or nil") end
+	return 0
+end
+
 return M

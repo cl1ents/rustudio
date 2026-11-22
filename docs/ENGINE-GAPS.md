@@ -358,6 +358,32 @@ GuiService:GetClosestDialogToPosition / GetClosestVisibleDialogToPosition;
 SetCore / GetCore handlers run at their registrant's identity (a game
 LocalScript's SetCore reaching a CoreScript handler that needs LocalUser).
 Engine features (GetEngineFeature) have no public source and read false.
+
+Menu and styles (round 2): Foundation (the CoreScripts' UI kit) styles its
+objects through StyleSheets with tags (".size-full", ".row ::UIListLayout").
+Fixed in gui_input.luau: tags and names with "-" in selectors; pseudo-instance
+selectors ("::UIListLayout", "::UIPadding", "::UIFlexItem", "::UICorner"),
+which make and style one modifier per matched element; rule data held
+strongly (a parented StyleRule's Lua object could be collected and its
+properties lost); equal-priority rules applied in sheet order. With those
+the settings menu's Leave / Respawn / Resume row draws as in Roblox and
+Resume closes the menu. AutomaticSize XY frames lay their content out again
+at the width they settle on (ExpChat's translation notice was 300x400; now
+its text height). TextService:GetTextSize / GetTextBoundsAsync measure with
+rustudio's text layout; GetTextSizeOffsetAsync answers 0 (Medium text,
+estimate). rbxthumb:// thumbnails (the People tab's headshot) come from the
+thumbnails API. Lua signals and render-step binds run at their connector's
+identity.
+
+Performance: style matching ran over every descendant of each StyleLink's
+parent every frame, RobloxGui's 45 000 CoreScript modules included. It now
+skips scripts and their children and reruns only when the tree, tags, the
+hovered / pressed objects, rules or the view change (and every 2 s);
+destroyed-instance sweeps run twice a second.
+
+Still open: the Respawn confirmation page draws its text tiny (its confirm
+button not yet verified); VoiceChatCore.CoreVoiceManager:680 indexes a nil
+service (AvatarChatService behind an engine feature, which reads false).
 TextService:GetTextSizeOffsetAsync is still a stub.
 
 ## Next (open, by how much they block real games)

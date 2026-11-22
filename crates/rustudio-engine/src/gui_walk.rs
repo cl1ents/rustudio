@@ -985,7 +985,22 @@ impl<M: AutoText> Sizer<'_, M> {
             if auto & 1 != 0 {
                 size.x = size.x.max(c.x);
             }
-            if auto & 2 != 0 {
+            if auto == 3 {
+                // Growing on both axes, the content is laid out again at the
+                // width it settled on (within a UISizeConstraint's MaxSize):
+                // children sized by Scale on X and wrapped text take that
+                // width, and the height is what they need there. (Measured
+                // at the old width, ExpChat's translation notice, a
+                // 300 px-max XY frame of two wrapped labels, wrapped a
+                // character per line and filled its 400 px MaxSize height.)
+                if let Some(c) = child_of_class(d, r, "UISizeConstraint") {
+                    let min = vec2(d, c, "MinSize", [0.0, 0.0]);
+                    let max = vec2(d, c, "MaxSize", [f32::INFINITY, f32::INFINITY]);
+                    size.x = size.x.clamp(min[0], max[0].max(min[0]));
+                }
+                let c = self.content_size_in(r, size, scale, auto, depth, room);
+                size.y = size.y.max(c.y);
+            } else if auto & 2 != 0 {
                 size.y = size.y.max(c.y);
             }
         }

@@ -1188,6 +1188,9 @@ impl AssetStore {
         if let Some(b) = generated(id) {
             return Fetch::Ready(b);
         }
+        if id.starts_with("rbxthumb://") {
+            return thumbnail(id);
+        }
         if let Some(a) = asset_ref(id) {
             return self.fetch(a);
         }
@@ -2892,4 +2895,44 @@ pub fn ray_triangles_normal(origin: Vec3, dir: Vec3, tris: &[[Vec3; 3]]) -> Opti
         }
     }
     best
+}
+
+/// `rbxthumb://type=…&id=…&w=…&h=…`: Roblox's thumbnail of a user (avatar,
+/// headshot, bust), an outfit or an asset, from the thumbnails API (the
+/// CoreScripts' player rows ask for AvatarHeadShot). Fetched once in the
+/// background; Pending until it arrives.
+fn thumbnail(id: &str) -> Fetch {
+    type Slot = Option<Result<Arc<Vec<u8>>, String>>;
+    static THUMBS: std::sync::LazyLock<Mutex<HashMap<String, Slot>>> = std::sync::LazyLock::new(Default::default);
+    let mut g = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+    match g.get(id) {
+        Some(Some(Ok(b))) => return Fetch::Ready(b.clone()),
+        Some(Some(Err(e))) => return Fetch::Unavailable(e.clone()),
+        Some(None) => return Fetch::Pending,
+        None => {}
+    }
+    let q = id.trim_start_matches("rbxthumb://").to_string();
+    let field = |k: &str| {
+        q.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| a.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string()))
+    };
+    let Some(tid) = field("id").and_then(|v| v.parse::<u64>().ok()) else {
+        return Fetch::Unavailable(format!("{id}: no id"));
+    };
+    let kind = field("type").unwrap_or_default();
+    g.insert(id.to_string(), None);
+    let key = id.to_string();
+    std::thread::spawn(move || {
+        use rustudio_account::characters::{thumbnails, Thumb};
+        let got = match kind.as_str() {
+            "AvatarHeadShot" => rustudio_account::api::headshots(&[tid]).map_err(|e| e.to_string()),
+            "Avatar" | "AvatarBust" => thumbnails(Thumb::User, &[tid]).map_err(|e| e.to_string()),
+            "Outfit" => thumbnails(Thumb::Outfit, &[tid]).map_err(|e| e.to_string()),
+            _ => thumbnails(Thumb::Asset, &[tid]).map_err(|e| e.to_string()),
+        };
+        let r = got.and_then(|v| v.into_iter().next().map(|(_, b)| Arc::new(b)).ok_or_else(|| format!("{key}: thumbnail not ready")));
+        if let Ok(mut g) = THUMBS.lock() {
+            g.insert(key, Some(r));
+        }
+    });
+    Fetch::Pending
 }

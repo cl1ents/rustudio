@@ -1225,10 +1225,14 @@ end
 -- the descendants of the link's parent (rules by Priority, later wins;
 -- "$token" values are the sheet's attributes; a property no rule sets any
 -- more gets back the value it had).
-local rule_props = setmetatable({}, { __mode = "k" })
-local rule_trans = setmetatable({}, { __mode = "k" })
-local sheet_derives = setmetatable({}, { __mode = "k" })
-local query_conds = setmetatable({}, { __mode = "k" })
+-- Held strongly: an instance's Lua object can be collected while the
+-- instance lives on (nothing in Lua refers to a parented StyleRule), and
+-- weak keys then lost its properties (Foundation's early rules, `.size-full`,
+-- stopped styling anything). Destroyed instances are dropped in `prune`.
+local rule_props = {}
+local rule_trans = {}
+local sheet_derives = {}
+local query_conds = {}
 local styles_dirty = true
 local function props_of(r)
     local t = rule_props[r]
@@ -1386,12 +1390,20 @@ local function parse_selector(s)
                 rel = "child"
             elseif tok == "&" then
                 rel = "self"
+            elseif tok:sub(1, 2) == "::" then
+                -- A pseudo-instance ("::UIListLayout"): the rule styles a
+                -- modifier of that class the engine keeps under each
+                -- element the steps before it match (Roblox's style
+                -- sheets: Foundation's ".row ::UIListLayout").
+                table.insert(steps, { pseudo = tok:sub(3):match("^([%a_][%w_]*)") })
+                rel = "desc"
             else
                 local c = { rel = rel, tags = {}, states = {} }
                 local rest = tok
                 if rest:sub(1, 1) == "&" then c.rel = "self" rest = rest:sub(2) end
                 c.class = rest:match("^([%a_][%w_]*)")
-                for kind, name in string.gmatch(rest, "([%.#:])([%w_]+)") do
+                -- (tags and names may hold "-": Foundation's ".size-full")
+                for kind, name in string.gmatch(rest, "([%.#:])([%w_%-]+)") do
                     if kind == "." then table.insert(c.tags, name)
                     elseif kind == "#" then c.name = name
                     else table.insert(c.states, name:lower()) end
@@ -1450,6 +1462,22 @@ local function steps_match(steps, o, root, scopes)
     end
     return from(#steps, o)
 end
+-- Pseudo-instances (selectors ending "::Class"): element → { class → the
+-- modifier rustudio made for it }, kept while a rule wants it.
+local pseudos = {}
+local function pseudo_of(n, class)
+    local t = pseudos[n]
+    if not t then t = {} pseudos[n] = t end
+    local p = t[class]
+    if p and p.Parent == n then return p end
+    local ok, made = pcall(Instance.new, class)
+    if not ok then return nil end
+    made.Name = class
+    made.Archivable = false
+    made.Parent = n
+    t[class] = made
+    return made
+end
 local styled = {} -- inst → { prop → original value }
 local style_targets = {} -- inst → { prop → value } last applied
 local function resolve_token(v, sheets)
@@ -1478,11 +1506,36 @@ local function collect_rules(sheet, out, seen)
     end
     add(sheet, nil, 0)
 end
+-- The instances a sheet can style under `root`: everything but scripts and
+-- what they hold (RobloxGui.Modules' 45 000 CoreScript modules would
+-- otherwise be matched against every rule).
+local function style_nodes(root)
+    local out, stack = { root }, { root }
+    while #stack > 0 do
+        local n = table.remove(stack)
+        for _, c in n:GetChildren() do
+            if not c:IsA("LuaSourceContainer") then
+                table.insert(out, c)
+                table.insert(stack, c)
+            end
+        end
+    end
+    return out
+end
+-- Matching reruns only when something it depends on changed (the tree,
+-- tags, hover / press, rules and queries, the view), and at least every
+-- two seconds for edits no mark covers (a rule's Selector set in place).
+local style_last_key, style_last_at = nil, -math.huge
 local function step_styles()
     local links = tracked.StyleLink
     if next(links) == nil and next(styled) == nil then return end
-    local want = {} -- inst → { prop → { value, transition } }
     local w, h = G.view()
+    local key = G.style_key() .. ":" .. w .. "x" .. h
+    local now = os.clock()
+    if key == style_last_key and not styles_dirty and now - style_last_at < 2 then return end
+    style_last_key, style_last_at, styles_dirty = key, now, false
+    local want = {} -- inst → { prop → { value, transition } }
+    local wanted_pseudo = {}
     local screen = Vector2.new(w, h - 58)
     for link in links do
         local sheet, root = link.StyleSheet, link.Parent
@@ -1491,33 +1544,53 @@ local function step_styles()
             collect_rules(sheet, rules, {})
             local sheets = { sheet }
             for _, d in sheet_derives[sheet] or {} do table.insert(sheets, d) end
-            local nodes = root:GetDescendants()
-            table.insert(nodes, 1, root)
+            local nodes = style_nodes(root)
             -- Matches per rule (nested rules match inside their parent's).
             local matched = {}
             local order = {}
-            for i, e in rules do order[i] = e end
+            for i, e in rules do order[i] = e e.i = i end
             for _, e in order do
                 local r = e.rule
                 local active = true
                 local q = r:FindFirstAncestorWhichIsA("StyleQuery")
                 if q and not query_active(q, screen) then active = false end
                 local m = {}
+                local pm = {} -- element → pseudo class
                 if active and r.Selector ~= "" then
                     local scopes = e.parent and matched[e.parent] or nil
                     if e.parent == nil or scopes then
                         for _, alt in parse_selector(r.Selector) do
-                            for _, n in nodes do
-                                if not m[n] and steps_match(alt, n, root, scopes) then m[n] = true end
+                            local last = alt[#alt]
+                            if last.pseudo then
+                                local base = table.move(alt, 1, #alt - 1, 1, {})
+                                if #base == 0 then
+                                    for n in scopes or { [root] = true } do pm[n] = last.pseudo end
+                                else
+                                    for _, n in nodes do
+                                        if not pm[n] and steps_match(base, n, root, scopes) then pm[n] = last.pseudo end
+                                    end
+                                end
+                            else
+                                for _, n in nodes do
+                                    if not m[n] and steps_match(alt, n, root, scopes) then m[n] = true end
+                                end
                             end
                         end
                     end
                 end
+                -- (a pseudo rule styles each element's modifier)
+                for n, class in pm do
+                    local p = pseudo_of(n, class)
+                    if p then m[p] = true wanted_pseudo[p] = true end
+                end
                 matched[r] = m
             end
+            -- Lower Priority first, so higher wins; equal priorities keep
+            -- the sheet's own order (a later rule wins: Foundation's
+            -- ".bg-action-standard" transparency over ".x-default-transparency").
             table.sort(order, function(a, b)
                 if a.rule.Priority ~= b.rule.Priority then return a.rule.Priority < b.rule.Priority end
-                return false
+                return a.i < b.i
             end)
             for _, e in order do
                 local r = e.rule
@@ -1569,6 +1642,14 @@ local function step_styles()
         if next(orig) == nil then
             styled[inst] = nil
             style_targets[inst] = nil
+        end
+    end
+    for n, t in pseudos do
+        for class, p in t do
+            if not wanted_pseudo[p] then
+                t[class] = nil
+                pcall(function() p:Destroy() end)
+            end
         end
     end
 end
@@ -2370,6 +2451,7 @@ end
 
 ---------------------------------------------------------------------- step
 -- Drops tracked instances that were destroyed (no Parent read possible).
+local style_swept_at = -math.huge
 local function prune()
     for _, set_ in tracked do
         for i in set_ do
@@ -2392,8 +2474,18 @@ local function prune()
     for pl in tweening do
         if not pcall(function() return pl.Parent end) then tweening[pl] = nil end
     end
+    -- The style tables grow with the CoreScripts' UI (thousands of styled
+    -- objects): swept twice a second, not every frame.
+    local now = os.clock()
+    if now - style_swept_at < 0.5 then return end
+    style_swept_at = now
     for inst in styled do
         if not pcall(function() return inst.Parent end) then styled[inst] = nil style_targets[inst] = nil end
+    end
+    for _, t in { rule_props, rule_trans, sheet_derives, query_conds, pseudos } do
+        for inst in t do
+            if not pcall(function() return inst.Parent end) then t[inst] = nil end
+        end
     end
 end
 

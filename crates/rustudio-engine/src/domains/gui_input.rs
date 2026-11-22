@@ -836,6 +836,35 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(out)
         })?,
     )?;
+    // What style rule matching depends on besides rules and the view: the
+    // DataModel's tree, its tags, and the hovered / pressed objects
+    // (gui_input.luau step_styles reruns only when it changes).
+    g.set(
+        "style_key",
+        lua.create_function(|lua, ()| {
+            let (id, tree) = {
+                let w = world(lua)?;
+                let d = w.d();
+                (d.id, d.tree_revision)
+            };
+            let tags = crate::runtime::ext::TAG_REVISION.load(std::sync::atomic::Ordering::Relaxed);
+            let sh = crate::gui::share();
+            let mut hover: u64 = 0;
+            for r in sh.hovered.iter() {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                r.hash(&mut h);
+                hover ^= h.finish();
+            }
+            if let Some(p) = sh.pressed {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                p.hash(&mut h);
+                hover ^= h.finish().rotate_left(1);
+            }
+            Ok(format!("{id}:{tree}:{tags}:{hover}"))
+        })?,
+    )?;
     g.set(
         "hover_state",
         lua.create_function(|_, inst: Value| {

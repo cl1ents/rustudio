@@ -2010,6 +2010,44 @@ pub(super) fn note_text_face(ctx: &egui::Context, font: &FaceKey, family: &FontF
     }
 }
 
+/// A face for TextService's measuring: a legacy Enum.Font name, or a Font
+/// (family, weight, italic).
+pub fn face_of_legacy(name: &str) -> FaceKey {
+    legacy_font(name)
+}
+
+pub fn face_of_font(f: &rbx_dom_weak::types::Font) -> FaceKey {
+    (f.family.clone(), weight_of(f.weight), matches!(f.style, rbx_dom_weak::types::FontStyle::Italic))
+}
+
+/// The size `text` takes in `font` at `text_size`, wrapped at `width` when
+/// it is finite and positive (TextService:GetTextSize / GetTextBoundsAsync):
+/// measured as the walk lays text out, with the face it last used for this
+/// font, else the default face. None before the GUI has drawn any text.
+pub fn measure_plain(text: &str, font: &FaceKey, text_size: f32, width: f32) -> Option<[f32; 2]> {
+    let ctx = TEXT_CTX.get()?;
+    let (family, em) = {
+        let m = TEXT_FACES.lock().unwrap_or_else(|e| e.into_inner());
+        let m = m.as_ref()?;
+        match m.get(font) {
+            Some(f) => f.clone(),
+            None => m.iter().find(|(_, (f, _))| *f == FontFamily::Proportional).map(|(_, f)| f.clone())?,
+        }
+    };
+    if text.is_empty() {
+        return Some([0.0, text_size]);
+    }
+    let ts = text_size * legacy_text_scale(font);
+    let mut f = egui::TextFormat::simple(egui::FontId::new(ts * em, family), Color32::WHITE);
+    f.line_height = Some(ts);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, f);
+    job.wrap.max_width = if width.is_finite() && width > 0.0 { width } else { f32::INFINITY };
+    job.round_output_to_gui = false;
+    let g = ctx.fonts_mut(|fo| fo.layout_job(job));
+    Some([g.size().x.ceil(), g.size().y.max(ts).ceil()])
+}
+
 /// TextBounds of a text object that wasn't drawn with its current text or
 /// box (`size`, its AbsoluteSize): Studio measures on the read, so a script
 /// reading it right after the object appeared (the title templates'

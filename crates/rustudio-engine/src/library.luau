@@ -70,8 +70,12 @@ local LuaSignal = {}
 LuaSignal.__index = LuaSignal
 -- A userdata like the engine's signals (typeof "RBXScriptSignal").
 function LuaSignal.new() return __rs_make_signal({ handlers = {} }, LuaSignal) end
+-- A handler runs at the identity of the thread that connected it, as the
+-- engine's signals do (a CoreScript's handler on UserGameSettings.Changed
+-- keeps its capabilities whoever changes the setting).
+local sig_identity, sig_spawn_as = __rs_identity, __rs_spawn_as
 function LuaSignal:Connect(fn)
-    local c = { Connected = true, fn = fn }
+    local c = { Connected = true, fn = fn, ident = sig_identity() }
     local list = self.handlers
     function c.Disconnect() c.Connected = false; local i = table.find(list, c); if i then table.remove(list, i) end end
     c.disconnect = c.Disconnect
@@ -91,7 +95,7 @@ function LuaSignal:Wait()
 end
 function LuaSignal:Fire(...)
     for _, c in table.clone(self.handlers) do
-        if c.Connected then task.spawn(c.fn, ...) end
+        if c.Connected then sig_spawn_as(c.ident, c.fn, ...) end
     end
 end
 
