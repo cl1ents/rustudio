@@ -211,6 +211,44 @@ pub const METHODS: &[(&str, &str)] = &[
     ("SupportsSwitchToSettingsApp", "LinkingService"),
     ("SwitchToSettingsApp", "LinkingService"),
     ("GetUserAgent", "HttpService"),
+    ("RegisterContextIdFromLua", "AudioFocusService"),
+    ("GetRegisteredContexts", "AudioFocusService"),
+    ("GetFocusedContextId", "AudioFocusService"),
+    ("RequestFocus", "AudioFocusService"),
+    ("AcquireFocus", "AudioFocusService"),
+    ("GetRootSID", "SessionService"),
+    ("SessionExists", "SessionService"),
+    ("SetSession", "SessionService"),
+    ("ReplaceSession", "SessionService"),
+    ("RemoveSession", "SessionService"),
+    ("GetSessionTag", "SessionService"),
+    ("GetCreatedTimestampUtcMs", "SessionService"),
+    ("SetMetadata", "SessionService"),
+    ("GetMetadata", "SessionService"),
+    ("RemoveMetadata", "SessionService"),
+    ("RemoveSessionsWithMetadataKey", "SessionService"),
+    ("GetSessionID", "SessionService"),
+    ("GenerateSessionInfoString", "SessionService"),
+    ("GetBreadcrumbs", "SessionService"),
+    ("GetHistory", "SessionService"),
+    ("AcquireContextFocus", "SessionService"),
+    ("ReleaseContextFocus", "SessionService"),
+    ("IsContextFocused", "SessionService"),
+    ("RegisterForExperienceJoin", "ExperienceService"),
+    ("RegisterForExperienceLeave", "ExperienceService"),
+    ("IsInExperience", "ExperienceService"),
+    ("GetPlaceJoinState", "ExperienceService"),
+    ("GetQueuePosition", "ExperienceService"),
+    ("GetFollowUserId", "ExperienceService"),
+    ("GetPendingJoinAttempt", "ExperienceService"),
+    ("ConsumePendingExperienceLeaveWithReason", "ExperienceService"),
+    ("LaunchExperience", "ExperienceService"),
+    ("LaunchExperienceFromSource", "ExperienceService"),
+    ("LaunchExperienceFromSourceWithCallback", "ExperienceService"),
+    ("LeaveExperienceWithReason", "ExperienceService"),
+    ("StartCrossExperience", "ExperienceService"),
+    ("StopCrossExperience", "ExperienceService"),
+    ("ExecuteCrossExperienceCall", "ExperienceService"),
     ("RegisterSetCore", "StarterGui"),
     ("RegisterGetCore", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -336,6 +374,7 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("RobloxGuiFocusedChanged", "RunService"),
     ("BlockListChanged", "Player"),
     ("FriendStatusChanged", "Player"),
+    ("OnContextRegistered", "AudioFocusService"),
     ("OnUserLayerLoadingStatusChanged", "IXPService"),
     ("OnCreatorLayerLoadingStatusChanged", "IXPService"),
     // Source links and SetValue (services `newindex`, services.luau).
@@ -550,7 +589,7 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("RbxAnalyticsService" | "IXPService" | "MemStorageService" | "MemStorageConnection" | "NotificationService" | "ThirdPartyUserService" | "AdService" | "AvatarChatService" | "AchievementService" | "EventIngestService", _)
         | ("Animator", "GetPlayingAnimationTracksCoreScript")
         | ("HttpService", "RequestInternal" | "GetUserAgent")
-        | ("LinkingService", _)
+        | ("LinkingService" | "AudioFocusService" | "SessionService" | "ExperienceService", _)
         | ("HttpRequest", _)
         | ("CaptureService", _)
         | ("VRService", "IsVRAppBuild")
@@ -1377,6 +1416,15 @@ pub fn prop_get(lua: &Lua, r: Ref, class: &str, key: &str) -> mlua::Result<Optio
                 None => Value::Nil,
             }
         }
+        // Whether the player may chat: ExpChat's isUserChatEnabled takes
+        // "Enabled…" or "AllUsers". A signed-in Studio user chats with all
+        // users (estimate: the account's real setting isn't read).
+        "ChatAvailabilityStatus" if class == "Player" => s(lua, "AllUsers")?,
+        // The client's OS and platform names (RobloxScriptSecurity), and no
+        // VR headset: Windows off macOS, as GetPlatform (estimate).
+        "OsPlatform" | "PlatformName" if class == "Player" => s(lua, if cfg!(target_os = "macos") { "OSX" } else { "Windows" })?,
+        "VRDevice" if class == "Player" => s(lua, "")?,
+        "UnfilteredChat" if class == "Player" => Value::Boolean(false),
         // The client build's git hash (RobloxScriptSecurity): rustudio is no
         // Roblox build (estimate: empty, as GetRobloxVersion).
         "ClientGitHash" if class == "RunService" => s(lua, "")?,

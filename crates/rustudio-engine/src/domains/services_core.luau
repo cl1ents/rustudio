@@ -440,4 +440,130 @@ M["LinkingService.SwitchToSettingsApp"] = function() end
 -- RequestInternal goes through rustudio's session).
 M["HttpService.GetUserAgent"] = function() return rs.user_agent end
 
+------------------------------------------------------------ AudioFocusService
+-- Which registered audio context (voice, the app's media) has the focus:
+-- RequestFocus grants it to the highest priority asking, AcquireFocus takes
+-- it. -1 while none has it (estimate).
+local audio_contexts, audio_focus, audio_priority = {}, -1, -math.huge
+M["AudioFocusService.RegisterContextIdFromLua"] = function(self, id)
+	if not table.find(audio_contexts, id) then
+		table.insert(audio_contexts, id)
+		rs.fire(self, "OnContextRegistered", id)
+	end
+end
+M["AudioFocusService.GetRegisteredContexts"] = function() return table.clone(audio_contexts) end
+M["AudioFocusService.GetFocusedContextId"] = function() return audio_focus end
+M["AudioFocusService.RequestFocus"] = function(self, id, priority)
+	priority = tonumber(priority) or 0
+	if audio_focus == id or priority >= audio_priority then
+		audio_focus, audio_priority = id, priority
+		return true
+	end
+	return false
+end
+M["AudioFocusService.AcquireFocus"] = function(self, id)
+	audio_focus = id
+	return true
+end
+
+------------------------------------------------------------ SessionService
+-- The app's session tree for telemetry: sessions by id with a parent, a tag,
+-- metadata and a creation time, and the contexts that hold focus. A Play
+-- client starts with one root session.
+local sessions = {}
+local root_sid
+local function now_ms() return math.floor(os.time() * 1000) end
+-- (made on first use: no DataModel yet when this chunk loads)
+local function root()
+	if not root_sid then
+		root_sid = game:GetService("HttpService"):GenerateGUID(false)
+		sessions[root_sid] = { tag = "Root", meta = {}, created = now_ms() }
+	end
+	return root_sid
+end
+local focused_contexts = {}
+M["SessionService.GetRootSID"] = function() return root() end
+M["SessionService.SessionExists"] = function(self, sid)
+	root()
+	return sessions[str_arg(sid, 1)] ~= nil
+end
+M["SessionService.SetSession"] = function(self, parent, child, tag)
+	sessions[str_arg(child, 2)] = { parent = parent, tag = tostring(tag or ""), meta = {}, created = now_ms() }
+end
+M["SessionService.ReplaceSession"] = function(self, sid, tag)
+	local s = sessions[str_arg(sid, 1)]
+	if s then s.tag = tostring(tag or "") end
+end
+M["SessionService.RemoveSession"] = function(self, sid)
+	sid = str_arg(sid, 1)
+	if sid == root_sid then return end
+	sessions[sid] = nil
+	for k, s in sessions do
+		if s.parent == sid then sessions[k] = nil end
+	end
+end
+M["SessionService.GetSessionTag"] = function(self, sid)
+	local s = sessions[str_arg(sid, 1)]
+	return s and s.tag or ""
+end
+M["SessionService.GetCreatedTimestampUtcMs"] = function(self, sid)
+	local s = sessions[str_arg(sid, 1)]
+	return s and s.created or 0
+end
+M["SessionService.SetMetadata"] = function(self, sid, key, value)
+	local s = sessions[str_arg(sid, 1)]
+	if s then s.meta[str_arg(key, 2)] = value end
+end
+M["SessionService.GetMetadata"] = function(self, sid, key)
+	local s = sessions[str_arg(sid, 1)]
+	return s and s.meta[str_arg(key, 2)]
+end
+M["SessionService.RemoveMetadata"] = function(self, sid, key)
+	local s = sessions[str_arg(sid, 1)]
+	if s then s.meta[str_arg(key, 2)] = nil end
+end
+M["SessionService.RemoveSessionsWithMetadataKey"] = function(self, key)
+	str_arg(key, 1)
+	for k, s in sessions do
+		if k ~= root_sid and s.meta[key] ~= nil then sessions[k] = nil end
+	end
+end
+M["SessionService.GetSessionID"] = function(self, structural) str_arg(structural, 1) return "" end
+M["SessionService.GenerateSessionInfoString"] = function() return "" end
+M["SessionService.GetBreadcrumbs"] = function() return {} end
+M["SessionService.GetHistory"] = function() return {} end
+M["SessionService.AcquireContextFocus"] = function(self, c) focused_contexts[str_arg(c, 1)] = true end
+M["SessionService.ReleaseContextFocus"] = function(self, c) focused_contexts[str_arg(c, 1)] = nil end
+M["SessionService.IsContextFocused"] = function(self, c) return focused_contexts[str_arg(c, 1)] == true end
+
+------------------------------------------------------------ ExperienceService
+-- The app's experience launcher. A Play session is in its experience and
+-- launches no other: join / leave callbacks are held on real connections
+-- (fired by nothing here), launches and cross-experience calls do nothing.
+local experience_events = {}
+local function experience_event(kind)
+	experience_events[kind] = experience_events[kind] or Instance.new("BindableEvent")
+	return experience_events[kind].Event
+end
+M["ExperienceService.RegisterForExperienceJoin"] = function(self, fn)
+	if type(fn) ~= "function" then fail("Argument 1 missing or nil") end
+	return experience_event("join"):Connect(fn)
+end
+M["ExperienceService.RegisterForExperienceLeave"] = function(self, fn)
+	if type(fn) ~= "function" then fail("Argument 1 missing or nil") end
+	return experience_event("leave"):Connect(fn)
+end
+M["ExperienceService.IsInExperience"] = function() return true end
+M["ExperienceService.GetPlaceJoinState"] = function() return "" end
+M["ExperienceService.GetQueuePosition"] = function() return 0 end
+M["ExperienceService.GetFollowUserId"] = function() return 0 end
+M["ExperienceService.GetPendingJoinAttempt"] = function() return {} end
+M["ExperienceService.ConsumePendingExperienceLeaveWithReason"] = function() return {} end
+for _, n in { "LaunchExperience", "LaunchExperienceFromSource" } do
+	M["ExperienceService." .. n] = function() return "" end
+end
+for _, n in { "LaunchExperienceFromSourceWithCallback", "LeaveExperienceWithReason", "StartCrossExperience", "StopCrossExperience", "ExecuteCrossExperienceCall" } do
+	M["ExperienceService." .. n] = function() end
+end
+
 return M
