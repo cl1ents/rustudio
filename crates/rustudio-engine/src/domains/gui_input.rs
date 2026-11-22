@@ -65,6 +65,8 @@ pub const METHODS: &[(&str, &str)] = &[
     ("SetPurchasePromptIsShown", "GuiService"),
     ("AddCenterDialog", "GuiService"),
     ("RemoveCenterDialog", "GuiService"),
+    ("GetClosestDialogToPosition", "GuiService"),
+    ("GetClosestVisibleDialogToPosition", "GuiService"),
     ("AddKey", "GuiService"),
     ("RemoveKey", "GuiService"),
     ("AddSpecialKey", "GuiService"),

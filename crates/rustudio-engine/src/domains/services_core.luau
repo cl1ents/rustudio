@@ -147,26 +147,35 @@ end
 -- name fails with Roblox's message ("SetCore: SendNotification has not been
 -- registered by the CoreScripts"); with no CoreScripts running they keep
 -- rustudio's old answers (nothing / nil).
+-- A registered function runs at its registrant's identity (a game
+-- LocalScript's SetCore reaches a CoreScript's handler with the CoreScript's
+-- capabilities, as in Roblox), on its own thread; its error comes back as
+-- "Error calling SetCore <name>: <message>".
 local set_core, get_core = {}, {}
 M["StarterGui.RegisterSetCore"] = function(self, name, fn)
 	if type(fn) ~= "function" then fail("Argument 2 missing or nil") end
-	set_core[str_arg(name, 1)] = fn
+	set_core[str_arg(name, 1)] = { fn = fn, ident = rs.identity() }
 end
 M["StarterGui.RegisterGetCore"] = function(self, name, fn)
 	if type(fn) ~= "function" then fail("Argument 2 missing or nil") end
-	get_core[str_arg(name, 1)] = fn
+	get_core[str_arg(name, 1)] = { fn = fn, ident = rs.identity() }
+end
+local function run_as(kind, name, h, ...)
+	local res = table.pack(rs.call_as(h.ident, h.fn, ...))
+	if not res[1] then fail(string.format("Error calling %s %s: %s", kind, name, tostring(res[2]))) end
+	return table.unpack(res, 2, res.n)
 end
 M["StarterGui.SetCore"] = function(self, name, ...)
-	local f = set_core[str_arg(name, 1)]
-	if f then
-		f(...)
+	local h = set_core[str_arg(name, 1)]
+	if h then
+		run_as("SetCore", name, h, ...)
 	elseif next(set_core) ~= nil then
 		fail(string.format("SetCore: %s has not been registered by the CoreScripts", name))
 	end
 end
 M["StarterGui.GetCore"] = function(self, name)
-	local f = get_core[str_arg(name, 1)]
-	if f then return f() end
+	local h = get_core[str_arg(name, 1)]
+	if h then return run_as("GetCore", name, h) end
 	if next(get_core) ~= nil then
 		fail(string.format("GetCore: %s has not been registered by the CoreScripts", name))
 	end
@@ -564,6 +573,12 @@ for _, n in { "LaunchExperience", "LaunchExperienceFromSource" } do
 end
 for _, n in { "LaunchExperienceFromSourceWithCallback", "LeaveExperienceWithReason", "StartCrossExperience", "StopCrossExperience", "ExecuteCrossExperienceCall" } do
 	M["ExperienceService." .. n] = function() end
+end
+
+------------------------------------------------------------ TelemetryService
+-- Roblox's client telemetry: no backend in a Play session (stubs).
+for _, n in { "LogEvent", "LogCounter", "LogStat", "LogDurationEvent", "LogDurationEventWithTimestamp" } do
+	M["TelemetryService." .. n] = function() end
 end
 
 return M

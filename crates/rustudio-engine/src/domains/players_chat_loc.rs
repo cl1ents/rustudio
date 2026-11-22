@@ -329,6 +329,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("RemoveTargetLocale", "LocalizationTable"),
     ("FormatByKey", "Translator"),
     ("Translate", "Translator"),
+    ("RobloxOnlyTranslate", "Translator"),
     ("GetTableEntries", "LocalizationService"),
     ("GetCorescriptLocalizations", "LocalizationService"),
 ];
@@ -511,7 +512,9 @@ fn call_inner(lua: &Lua, name: &str, this: Ref, args: &MultiValue) -> mlua::Resu
             }
             Err(rt_err(format!("Key {key} not found for locale {}", t.locale)))
         }
-        "Translate" => {
+        // RobloxOnlyTranslate (the CoreScripts' own, RobloxScriptSecurity):
+        // the same lookup as Translate.
+        "Translate" | "RobloxOnlyTranslate" => {
             let ctx = opt_inst(&arg(args, 1));
             let text = s_arg(args, 2)?;
             let t = state(lua)?.translators.get(&this).cloned().unwrap_or(Translator { table: None, locale: "en-us".into() });

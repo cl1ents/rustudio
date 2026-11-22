@@ -65,6 +65,37 @@ pub(super) fn install(lua: &Lua, rs: &Table) -> mlua::Result<()> {
         })?,
     )?;
     rs.set("user_agent", concat!("rustudio/", env!("CARGO_PKG_VERSION")))?;
+    rs.set("identity", lua.create_function(|lua, ()| Ok(security::current(lua)))?)?;
+    // f(...) on a new thread at identity `ident`: (true, results…) when it
+    // finished, (false, message) when it failed, (true) when it yielded (it
+    // carries on by itself).
+    rs.set(
+        "call_as",
+        lua.create_function(|lua, mut args: MultiValue| {
+            let ident = match args.pop_front() {
+                Some(Value::Integer(i)) => i as u8,
+                Some(Value::Number(n)) => n as u8,
+                _ => security::current(lua),
+            };
+            let Some(Value::Function(f)) = args.pop_front() else { return Err(rt_err("call_as: function expected")) };
+            let th = crate::runtime::domains::assets_cloud::scene::create_thread(lua, f)?;
+            security::set(&th, ident);
+            let mut out = MultiValue::new();
+            match th.resume::<MultiValue>(args) {
+                Ok(r) => {
+                    out.push_back(Value::Boolean(true));
+                    if th.status() != mlua::thread::ThreadStatus::Resumable {
+                        out.extend(r);
+                    }
+                }
+                Err(e) => {
+                    out.push_back(Value::Boolean(false));
+                    out.push_back(Value::String(lua.create_string(describe_error(&e))?));
+                }
+            }
+            Ok(out)
+        })?,
+    )?;
     let m: Table = lua.load(include_str!("services_core.luau")).set_name("=rustudio.services.core").call(rs.clone())?;
     lua.set_named_registry_value("svc_core_impl", m)
 }
@@ -304,6 +335,17 @@ mod tests {
         rt.enter(w);
         rt.bind_globals().unwrap();
         rt.start_core_scripts(installed).unwrap();
+        // A game script's SetCore reaches the CoreScript's handler, which
+        // runs at the CoreScript's identity (GetEngineFeature needs LocalUser).
+        let r = security::with_main_identity(&rt.lua, security::GAME, || {
+            let env = crate::globals_parity::harness_env(&rt.lua)?;
+            rt.lua
+                .load("game:GetService('StarterGui'):SetCore('Probe', 1) print('probe-done', pcall(game.GetEngineFeature, game, 'X'))")
+                .set_name("=game-script")
+                .set_environment(env)
+                .exec()
+        });
+        assert!(r.is_ok(), "{r:?}");
         for _ in 0..10 {
             rt.step(1.0 / 60.0);
         }
@@ -317,6 +359,7 @@ mod tests {
             local sg = game:GetService("StarterGui")
             print("flag", game:DefineFastFlag("X", true), game:GetFastFlag("X"), game:GetFastFlag("Undefined"))
             sg:RegisterSetCore("Greet", function(v) print("setcore", v) end)
+            sg:RegisterSetCore("Probe", function(v) print("probe", v, game:GetEngineFeature("X")) end)
             sg:RegisterGetCore("Answer", function() return 42 end)
             sg:SetCore("Greet", "hi")
             print("getcore", sg:GetCore("Answer"))
@@ -352,5 +395,9 @@ mod tests {
         assert!(has("starter CoreGui StarterScript"), "{out:?}");
         assert!(has("child CoreGui.CoreScripts/Child CoreGui.CoreScripts/Child"), "{out:?}");
         assert!(has("lib 7"), "{out:?}");
+        // The handler ran with the CoreScript's capabilities; the game
+        // script itself still lacks LocalUser.
+        assert!(has("probe 1 false"), "{out:?}");
+        assert!(has("probe-done false"), "{out:?}");
     }
 }

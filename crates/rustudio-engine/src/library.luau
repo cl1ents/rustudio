@@ -360,6 +360,12 @@ end
 function M.TweenSizeAndPosition(self, size, pos, dir, style, t, override, cb)
     return gui_tween(self, { Size = size, Position = pos }, dir, style, t, override, cb)
 end
+-- The CoreScripts' own copies (RobloxScriptSecurity, same parameters): the
+-- same tweens, kept apart from a game's in Roblox (estimate: one tween per
+-- object here).
+M.TweenPositionInternal = M.TweenPosition
+M.TweenSizeInternal = M.TweenSize
+M.TweenSizeAndPositionInternal = M.TweenSizeAndPosition
 
 -- Humanoid:GetLimb(part) → Enum.Limb (R6 names), GetBodyPartR15(part) →
 -- Enum.BodyPartR15, GetMoveVelocity() = MoveDirection × WalkSpeed.
@@ -1235,22 +1241,25 @@ function M.SetSharedTable(self, name, t) shared_tables[name] = t end
 ---------------------------------------------------------------- RunService
 -- Bound functions run every frame in priority order (lowest first), before
 -- RenderStepped's own connections; one that yields doesn't hold up the rest.
+-- Each runs at the identity of the script that bound it (a CoreScript's
+-- bind keeps its capabilities whoever bound first).
+local rs_identity, rs_spawn_as = __rs_identity, __rs_spawn_as
 local render_steps, render_order, render_conn = {}, {}, nil
 local function render_sort()
     render_order = {}
-    for name, e in render_steps do table.insert(render_order, { name = name, p = e.p, n = e.n, fn = e.fn }) end
+    for name, e in render_steps do table.insert(render_order, { name = name, p = e.p, n = e.n, fn = e.fn, ident = e.ident }) end
     table.sort(render_order, function(a, b) if a.p ~= b.p then return a.p < b.p end return a.n < b.n end)
 end
 local render_seq = 0
 function M.BindToRenderStep(self, name, priority, fn)
     render_seq += 1
     local p = if typeof(priority) == "EnumItem" then priority.Value else tonumber(priority)
-    render_steps[name] = { p = p or 0, n = render_seq, fn = fn }
+    render_steps[name] = { p = p or 0, n = render_seq, fn = fn, ident = rs_identity() }
     render_sort()
     if not render_conn then
         render_conn = self.RenderStepped:Connect(function(dt)
             for _, e in render_order do
-                if render_steps[e.name] and render_steps[e.name].fn == e.fn then task.spawn(e.fn, dt) end
+                if render_steps[e.name] and render_steps[e.name].fn == e.fn then rs_spawn_as(e.ident, e.fn, dt) end
             end
         end)
     end

@@ -186,6 +186,35 @@ methods["GuiService.CloseStatsBasedOnInputString"] = function() return false end
 methods["GuiService.OpenBrowserWindow"] = function() end
 methods["GuiService.OpenNativeOverlay"] = function() end
 methods["GuiService.ToggleFullscreen"] = function() end
+-- The Dialog nearest `pos` whose speaker (its parent part, or a model's
+-- PrimaryPart / Head) is within its ConversationDistance: the dialogs the
+-- CoreScripts' MainBotChatScript2 offers (the API reference's
+-- ConversationDistance). "Visible" also wants the speaker on screen.
+local function closest_dialog(pos, visible)
+    refresh_game()
+    local ws = svc("Workspace")
+    if typeof(pos) ~= "Vector3" or not ws then return nil end
+    local cam = ws.CurrentCamera
+    local best, best_d = nil, math.huge
+    for _, d in ws:GetDescendants() do
+        if d:IsA("Dialog") then
+            local p = d.Parent
+            local part = if p and p:IsA("BasePart") then p
+                elseif p and p:IsA("Model") then (p.PrimaryPart or p:FindFirstChild("Head"))
+                else nil
+            if part and part:IsA("BasePart") then
+                local dist = (part.Position - pos).Magnitude
+                local on_screen = not visible or (cam and select(2, cam:WorldToViewportPoint(part.Position)))
+                if dist <= d.ConversationDistance and dist < best_d and on_screen then
+                    best, best_d = d, dist
+                end
+            end
+        end
+    end
+    return best
+end
+methods["GuiService.GetClosestDialogToPosition"] = function(_, pos) return closest_dialog(pos, false) end
+methods["GuiService.GetClosestVisibleDialogToPosition"] = function(_, pos) return closest_dialog(pos, true) end
 -- Center dialogs: shown at once, hidden on removal (no queue: estimate).
 local center_dialogs = {}
 methods["GuiService.AddCenterDialog"] = function(_, dialog, _, show, hide)
@@ -470,9 +499,14 @@ local function step_tools()
 end
 
 ------------------------------------------------------------ GuiObject state
+-- (Enum.GuiState.Focus only where the API dump has it: Studio 0.744's has
+-- Idle, Hover, Press, NonInteractable, so a focused TextBox reads as its
+-- pointer state, not an error.)
+local FOCUS_STATE = select(2, pcall(function() return Enum.GuiState.Focus end))
+if typeof(FOCUS_STATE) ~= "EnumItem" then FOCUS_STATE = nil end
 get["GuiObject.GuiState"] = function(o)
     if not o.Interactable then return Enum.GuiState.NonInteractable end
-    if focused == o then return Enum.GuiState.Focus end
+    if focused == o and FOCUS_STATE then return FOCUS_STATE end
     local hovered, pressed = G.hover_state(o)
     if pressed then return Enum.GuiState.Press end
     if hovered then return Enum.GuiState.Hover end

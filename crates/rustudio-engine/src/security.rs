@@ -621,6 +621,23 @@ pub fn install_globals(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set("__rs_identity", lua.create_function(|lua, ()| Ok(current(lua)))?)?;
     g.set("__rs_sec_event", lua.create_function(event_check)?)?;
+    // f(...) on a new thread at identity `id` (the library's RunService
+    // render-step binds run at their binder's identity, as connections do).
+    g.set(
+        "__rs_spawn_as",
+        lua.create_function(|lua, mut args: MultiValue| {
+            let id = match args.pop_front() {
+                Some(Value::Integer(i)) => i as u8,
+                Some(Value::Number(n)) => n as u8,
+                _ => GAME,
+            };
+            let Some(Value::Function(f)) = args.pop_front() else { return Ok(()) };
+            let th = crate::runtime::domains::assets_cloud::scene::create_thread(lua, f)?;
+            set(&th, id);
+            crate::runtime::resume(lua, &th, args.into_iter().collect());
+            Ok(())
+        })?,
+    )?;
     let names = lua.create_table()?;
     if let Some(r) = rules() {
         for (name, list) in &r.by_name {
@@ -688,7 +705,7 @@ pub fn seal(lua: &Lua) -> mlua::Result<()> {
             inst.raw_set("new", crate::cmeta::wrap(lua, f, false)?)?;
         }
     }
-    for k in ["__rs_identity", "__rs_sec_event", "__rs_sec_event_names", "__rs_plugin_asset"] {
+    for k in ["__rs_identity", "__rs_sec_event", "__rs_sec_event_names", "__rs_plugin_asset", "__rs_spawn_as"] {
         g.raw_set(k, Value::Nil)?;
     }
     Ok(())

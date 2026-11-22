@@ -342,19 +342,22 @@ backend, each noted in the code):
 - Rendering: CoreGui ScreenGuis (also inside Folders) draw above PlayerGui;
   GSUB ligatures for icon fonts; rbxasset:// reaches Studio's ExtraContent.
 
-Live client flags (crates/rustudio-core/src/client_flags.rs): Play now
-loads Roblox's public PCDesktopClient settings (25 850 flags) and the
-CoreScripts take today's variants: the newer player list draws (with its
-close button), and the newer chat and top bar code runs. Those reach engine
-API the default-flag paths didn't, so with live flags the top bar fails to
-start again. First blockers, on a TextChatService place:
-`ExpChat.isUserChatEnabled:5` (a nil where a string is expected),
-AudioFocusService:GetFocusedContextId, SessionService:SessionExists and
-ExperienceService:RegisterForExperienceLeave. With the default flags (no
-kept copy, offline) the top bar draws as before. Clicking the chat button
-is not checked yet (the top bar's buttons are Foundation interactables, not
-GuiButtons). Engine features (GetEngineFeature) have no public source and
-read false.
+Live client flags (crates/rustudio-core/src/client_flags.rs): Play loads
+Roblox's public PCDesktopClient settings (25 850 flags) and the CoreScripts
+take today's variants. With all of them, on a TextChatService copy of the
+control place, StarterScript and the CoreScripts start with no error in
+Output; about 8 s into Play the "Chrome" top bar draws (Roblox logo, menu
+and chat buttons), with ExpChat's chat window and input bar and the newer
+player list. Clicking the menu button opens Chrome's menu (Switch avatar,
+Music, Report, Leaderboard, Emotes, Inventory, Respawn); clicking the input
+bar, typing and Enter puts the message in the chat window. Closed for this:
+Player.ChatAvailabilityStatus, AudioFocusService, SessionService,
+ExperienceService, TelemetryService (stubs), LinkingService,
+HttpService:GetUserAgent, Translator:RobloxOnlyTranslate,
+GuiService:GetClosestDialogToPosition / GetClosestVisibleDialogToPosition;
+SetCore / GetCore handlers run at their registrant's identity (a game
+LocalScript's SetCore reaching a CoreScript handler that needs LocalUser).
+Engine features (GetEngineFeature) have no public source and read false.
 TextService:GetTextSizeOffsetAsync is still a stub.
 
 ## Next (open, by how much they block real games)

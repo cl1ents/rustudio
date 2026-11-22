@@ -97,6 +97,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("RemoveTargetLocale", "LocalizationTable"),
     ("FormatByKey", "Translator"),
     ("Translate", "Translator"),
+    ("RobloxOnlyTranslate", "Translator"),
     ("GetTableEntries", "LocalizationService"),
     ("GetCorescriptLocalizations", "LocalizationService"),
 ];

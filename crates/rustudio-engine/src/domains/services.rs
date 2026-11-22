@@ -249,6 +249,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ("StartCrossExperience", "ExperienceService"),
     ("StopCrossExperience", "ExperienceService"),
     ("ExecuteCrossExperienceCall", "ExperienceService"),
+    ("LogEvent", "TelemetryService"),
+    ("LogCounter", "TelemetryService"),
+    ("LogStat", "TelemetryService"),
+    ("LogDurationEvent", "TelemetryService"),
+    ("LogDurationEventWithTimestamp", "TelemetryService"),
     ("RegisterSetCore", "StarterGui"),
     ("RegisterGetCore", "StarterGui"),
     ("SetCore", "StarterGui"),
@@ -589,7 +594,7 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
         | ("RbxAnalyticsService" | "IXPService" | "MemStorageService" | "MemStorageConnection" | "NotificationService" | "ThirdPartyUserService" | "AdService" | "AvatarChatService" | "AchievementService" | "EventIngestService", _)
         | ("Animator", "GetPlayingAnimationTracksCoreScript")
         | ("HttpService", "RequestInternal" | "GetUserAgent")
-        | ("LinkingService" | "AudioFocusService" | "SessionService" | "ExperienceService", _)
+        | ("LinkingService" | "AudioFocusService" | "SessionService" | "ExperienceService" | "TelemetryService", _)
         | ("HttpRequest", _)
         | ("CaptureService", _)
         | ("VRService", "IsVRAppBuild")
