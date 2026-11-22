@@ -1417,50 +1417,128 @@ local function parse_selector(s)
     selector_cache[s] = alts
     return alts
 end
-local function compound_matches(c, o)
-    if c.class and not o:IsA(c.class) then return false end
-    if c.name and o.Name ~= c.name then return false end
-    for _, t in c.tags do
-        if not o:HasTag(t) then return false end
+-- Matching runs over a styled tree as G.style_tree lists it (instance,
+-- parent index, ClassName, Name, tags), so a rule tested against an
+-- element reads no engine property: IsA is kept per ClassName, GuiState
+-- per element and match. Ancestors above the root (a child step may cross
+-- it) are read on demand and marked `outside`.
+local isa_memo = {} -- ClassName → { class → IsA }
+local function tree_isa(tree, i, class)
+    local cn = tree.class[i]
+    local t = isa_memo[cn]
+    if not t then t = {} isa_memo[cn] = t end
+    local v = t[class]
+    if v == nil then v = tree.inst[i]:IsA(class) t[class] = v end
+    return v
+end
+local function tree_parent(tree, i)
+    local p = tree.parent[i]
+    if p ~= 0 then return if p then p else nil end
+    local up = tree.inst[i].Parent
+    if not up then tree.parent[i] = false return nil end
+    local n = #tree.inst + 1
+    tree.inst[n], tree.class[n], tree.name[n], tree.parent[n] = up, up.ClassName, up.Name, 0
+    local tags = up:GetTags()
+    if #tags > 0 then
+        local s = {}
+        for _, t in tags do s[t] = true end
+        tree.tags[n] = s
+    end
+    tree.outside[n] = true
+    tree.parent[i] = n
+    return n
+end
+-- The parent inside the root (nil at the root and above it).
+local function up_in(tree, i)
+    if tree.outside[i] then return nil end
+    local p = tree.parent[i]
+    if not p or p == 0 or tree.outside[p] then return nil end
+    return p
+end
+local function compound_matches(c, tree, i)
+    if c.class and not tree_isa(tree, i, c.class) then return false end
+    if c.name and tree.name[i] ~= c.name then return false end
+    if #c.tags > 0 then
+        local s = tree.tags[i]
+        if not s then return false end
+        for _, t in c.tags do
+            if not s[t] then return false end
+        end
     end
     if #c.states > 0 then
-        if not o:IsA("GuiObject") then return false end
-        local st = get["GuiObject.GuiState"](o).Name:lower()
+        if not tree_isa(tree, i, "GuiObject") then return false end
+        local st = tree.state[i]
+        if st == nil then
+            st = get["GuiObject.GuiState"](tree.inst[i]).Name:lower()
+            tree.state[i] = st
+        end
         for _, s in c.states do
             if s ~= st then return false end
         end
     end
     return true
 end
--- Does `steps` (right-most last) match o, with every step inside `root`?
--- `scope`: the instances a nested rule's parent matched (nil: the root).
-local function steps_match(steps, o, root, scopes)
-    local function from(i, node)
-        local c = steps[i]
-        if not compound_matches(c, node) then return false end
-        if i == 1 then
-            if scopes then
-                if c.rel == "self" then return scopes[node] == true end
-                local p = node.Parent
-                if c.rel == "child" then return p ~= nil and scopes[p] == true end
-                while p and p ~= root.Parent do
-                    if scopes[p] then return true end
-                    p = p.Parent
-                end
-                return false
+-- Does steps[1..k] (right-most last) match element `node`, with every
+-- step inside the root? `scopes`: the instances a nested rule's parent
+-- matched (nil: the root).
+local function steps_from(steps, k, tree, node, scopes)
+    local c = steps[k]
+    if not compound_matches(c, tree, node) then return false end
+    if k == 1 then
+        if scopes then
+            if c.rel == "self" then return scopes[tree.inst[node]] == true end
+            if c.rel == "child" then
+                local p = tree_parent(tree, node)
+                return p ~= nil and scopes[tree.inst[p]] == true
             end
-            if c.rel == "child" then return node.Parent == root end
-            return node == root or node:IsDescendantOf(root)
+            -- (up to the root; from above it, to the DataModel's top)
+            local out = tree.outside[node]
+            local p = if out then tree_parent(tree, node) else up_in(tree, node)
+            while p do
+                if scopes[tree.inst[p]] then return true end
+                p = if out then tree_parent(tree, p) else up_in(tree, p)
+            end
+            return false
         end
-        local p = node.Parent
-        if c.rel == "child" then return p ~= nil and from(i - 1, p) end
-        while p and (p == root or p:IsDescendantOf(root)) do
-            if from(i - 1, p) then return true end
-            p = p.Parent
-        end
-        return false
+        if tree.outside[node] then return false end
+        if c.rel == "child" then return tree.parent[node] == 1 end
+        return true
     end
-    return from(#steps, o)
+    if c.rel == "child" then
+        local p = tree_parent(tree, node)
+        return p ~= nil and steps_from(steps, k - 1, tree, p, scopes)
+    end
+    local p = up_in(tree, node)
+    while p do
+        if steps_from(steps, k - 1, tree, p, scopes) then return true end
+        p = up_in(tree, p)
+    end
+    return false
+end
+local function steps_match(steps, tree, i, scopes)
+    return steps_from(steps, #steps, tree, i, scopes)
+end
+-- The elements compound `c` can match: those holding its first tag (most
+-- of Foundation's selectors are tags), else all of them (nil).
+local NO_NODES = table.freeze({})
+local function candidates(tree, c)
+    if not c.tags or #c.tags == 0 then return nil end
+    local idx = tree.by_tag
+    if not idx then
+        idx = {}
+        for i = 1, tree.n do
+            local s = tree.tags[i]
+            if s then
+                for t in s do
+                    local l = idx[t]
+                    if not l then l = {} idx[t] = l end
+                    table.insert(l, i)
+                end
+            end
+        end
+        tree.by_tag = idx
+    end
+    return idx[c.tags[1]] or NO_NODES
 end
 -- Pseudo-instances (selectors ending "::Class"): element → { class → the
 -- modifier rustudio made for it }, kept while a rule wants it.
@@ -1529,108 +1607,197 @@ local function collect_rules(sheet, out, seen)
     end
     add(sheet, nil, 0)
 end
--- The instances a sheet can style under `root`: everything but scripts and
--- what they hold (RobloxGui.Modules' 45 000 CoreScript modules would
--- otherwise be matched against every rule).
-local function style_nodes(root)
-    local out, stack = { root }, { root }
-    while #stack > 0 do
-        local n = table.remove(stack)
-        for _, c in n:GetChildren() do
-            if not c:IsA("LuaSourceContainer") then
-                table.insert(out, c)
-                table.insert(stack, c)
+-- A sheet's rules as one matching pass reads them (each StyleLink to it
+-- shares them): in sheet order with their parsed selectors, whether their
+-- StyleQuery holds, and the order rules apply in. Lower Priority first,
+-- so higher wins; equal priorities keep the sheet's own order (a later
+-- rule wins: Foundation's ".bg-action-standard" transparency over
+-- ".x-default-transparency").
+local function compile_sheet(sheet, screen)
+    local rules, seen = {}, {}
+    collect_rules(sheet, rules, seen)
+    local sheets = { sheet }
+    for _, d in sheet_derives[sheet] or {} do table.insert(sheets, d) end
+    local states = false
+    for i, e in rules do
+        local r = e.rule
+        e.i = i
+        e.priority = r.Priority
+        local q = r:FindFirstAncestorWhichIsA("StyleQuery")
+        local selector = r.Selector
+        if (q == nil or query_active(q, screen)) and selector ~= "" then
+            e.alts = parse_selector(selector)
+            for _, alt in e.alts do
+                for _, c in alt do
+                    if c.states and #c.states > 0 then states = true end
+                end
+            end
+        end
+    end
+    local order = table.move(rules, 1, #rules, 1, {})
+    table.sort(order, function(a, b)
+        if a.priority ~= b.priority then return a.priority < b.priority end
+        return a.i < b.i
+    end)
+    local all_sheets = {} -- (every sheet read: derives too)
+    for s in seen do table.insert(all_sheets, s) end
+    return { rules = rules, order = order, sheets = sheets, states = states, all_sheets = all_sheets }
+end
+-- A rule's properties with their tokens resolved for its sheet, each
+-- { value, transition } (shared by every element it styles).
+local function rule_values(e, sheets)
+    if e.values then return e.values end
+    local out = {}
+    local props = rule_props[e.rule]
+    if props then
+        local tr = rule_trans[e.rule] or {}
+        for k, v in props do
+            local val = resolve_token(v, sheets)
+            if val ~= nil then out[k] = { val, tr[k] or tr["*"] } end
+        end
+    end
+    e.values = out
+    return out
+end
+-- One StyleLink's matches: { element, rule values } in the order its
+-- rules apply, and the pseudo-instances it wants.
+local function match_link(link, root, cs)
+    local out = { list = {}, pseudo = {} }
+    local tree = if #cs.rules > 0 then G.style_tree(root, link) else nil
+    if not tree then
+        G.style_forget(link)
+        return out
+    end
+    tree.state = {}
+    local n_nodes = tree.n
+    -- Matches per rule (nested rules match inside their parent's).
+    local matched = {}
+    for _, e in cs.rules do
+        local m = {}
+        local pm = {} -- element → pseudo class
+        if e.alts then
+            local scopes = e.parent and matched[e.parent] or nil
+            if e.parent == nil or scopes then
+                for _, alt in e.alts do
+                    local last = alt[#alt]
+                    if last.pseudo then
+                        local base = alt.base
+                        if not base then
+                            base = table.move(alt, 1, #alt - 1, 1, {})
+                            alt.base = base
+                        end
+                        if #base == 0 then
+                            for n in scopes or { [root] = true } do pm[n] = last.pseudo end
+                        else
+                            local cand = candidates(tree, base[#base])
+                            for j = 1, if cand then #cand else n_nodes do
+                                local i = if cand then cand[j] else j
+                                local n = tree.inst[i]
+                                if not pm[n] and steps_match(base, tree, i, scopes) then pm[n] = last.pseudo end
+                            end
+                        end
+                    else
+                        local cand = candidates(tree, last)
+                        for j = 1, if cand then #cand else n_nodes do
+                            local i = if cand then cand[j] else j
+                            local n = tree.inst[i]
+                            if not m[n] and steps_match(alt, tree, i, scopes) then m[n] = true end
+                        end
+                    end
+                end
+            end
+        end
+        -- (a pseudo rule styles each element's modifier)
+        for n, class in pm do
+            local p = pseudo_of(n, class)
+            if p then m[p] = true out.pseudo[p] = true end
+        end
+        matched[e.rule] = m
+    end
+    for _, e in cs.order do
+        local m = matched[e.rule]
+        if next(m) then
+            local values = rule_values(e, cs.sheets)
+            if next(values) then
+                for n in m do table.insert(out.list, { n, values }) end
             end
         end
     end
     return out
 end
--- Matching reruns only when something it depends on changed (the tree,
--- tags, hover / press, rules and queries, the view), and at least every
--- two seconds for edits no mark covers (a rule's Selector set in place).
-local style_last_key, style_last_at = nil, -math.huge
+-- Matching reruns for a StyleLink when its styled tree changed (an
+-- element added, moved or removed, a Name / Tags / Interactable written:
+-- G.style_changes reads the DataModel's journal), and for all of them when
+-- a sheet, a rule's properties or a query condition changed, the view's
+-- size did, or (when a rule has a :state) the hovered, pressed or focused
+-- object did. Each link keeps its matches; the elements' styles are the
+-- links' matches applied in turn.
+local style_compiled = {} -- sheet → compile_sheet's
+local style_links = {} -- StyleLink → { sheet, root, matches }
+local style_last_view, style_last_hover, style_last_focus, style_states = nil, nil, nil, true
 local function step_styles()
     local links = tracked.StyleLink
     if next(links) == nil and next(styled) == nil then return end
+    local all, dirty = G.style_changes()
     local w, h = G.view()
-    local key = G.style_key() .. ":" .. w .. "x" .. h
-    local now = os.clock()
-    if key == style_last_key and not styles_dirty and now - style_last_at < 2 then return end
-    style_last_key, style_last_at, styles_dirty = key, now, false
+    local view = w .. "x" .. h
+    local hover = G.style_key()
+    if view ~= style_last_view or styles_dirty then all = true end
+    if style_states and (hover ~= style_last_hover or focused ~= style_last_focus) then all = true end
+    style_last_view, style_last_hover, style_last_focus, styles_dirty = view, hover, focused, false
+    local any = all or dirty ~= nil
+    for link in style_links do
+        if not links[link] then
+            style_links[link] = nil
+            G.style_forget(link)
+            any = true
+        end
+    end
+    for link in links do
+        if not style_links[link] then any = true end
+    end
+    if not any then return end
+    local screen = Vector2.new(w, h - 58)
+    if all then
+        style_compiled = {}
+    end
+    local sheets_changed = all
+    local states = false
     local want = {} -- inst → { prop → { value, transition } }
     local wanted_pseudo = {}
-    local screen = Vector2.new(w, h - 58)
     for link in links do
         local sheet, root = link.StyleSheet, link.Parent
-        if sheet and root and link:IsDescendantOf(game) then
-            local rules = {}
-            collect_rules(sheet, rules, {})
-            local sheets = { sheet }
-            for _, d in sheet_derives[sheet] or {} do table.insert(sheets, d) end
-            local nodes = style_nodes(root)
-            -- Matches per rule (nested rules match inside their parent's).
-            local matched = {}
-            local order = {}
-            for i, e in rules do order[i] = e e.i = i end
-            for _, e in order do
-                local r = e.rule
-                local active = true
-                local q = r:FindFirstAncestorWhichIsA("StyleQuery")
-                if q and not query_active(q, screen) then active = false end
-                local m = {}
-                local pm = {} -- element → pseudo class
-                if active and r.Selector ~= "" then
-                    local scopes = e.parent and matched[e.parent] or nil
-                    if e.parent == nil or scopes then
-                        for _, alt in parse_selector(r.Selector) do
-                            local last = alt[#alt]
-                            if last.pseudo then
-                                local base = table.move(alt, 1, #alt - 1, 1, {})
-                                if #base == 0 then
-                                    for n in scopes or { [root] = true } do pm[n] = last.pseudo end
-                                else
-                                    for _, n in nodes do
-                                        if not pm[n] and steps_match(base, n, root, scopes) then pm[n] = last.pseudo end
-                                    end
-                                end
-                            else
-                                for _, n in nodes do
-                                    if not m[n] and steps_match(alt, n, root, scopes) then m[n] = true end
-                                end
-                            end
-                        end
-                    end
-                end
-                -- (a pseudo rule styles each element's modifier)
-                for n, class in pm do
-                    local p = pseudo_of(n, class)
-                    if p then m[p] = true wanted_pseudo[p] = true end
-                end
-                matched[r] = m
+        local c = style_links[link]
+        if not (sheet and root and link:IsDescendantOf(game)) then
+            if c then G.style_forget(link) end
+            style_links[link] = { matches = { list = {}, pseudo = {} } }
+        else
+            local cs = style_compiled[sheet]
+            if not cs then
+                cs = compile_sheet(sheet, screen)
+                style_compiled[sheet] = cs
+                sheets_changed = true
             end
-            -- Lower Priority first, so higher wins; equal priorities keep
-            -- the sheet's own order (a later rule wins: Foundation's
-            -- ".bg-action-standard" transparency over ".x-default-transparency").
-            table.sort(order, function(a, b)
-                if a.rule.Priority ~= b.rule.Priority then return a.rule.Priority < b.rule.Priority end
-                return a.i < b.i
-            end)
-            for _, e in order do
-                local r = e.rule
-                local props = rule_props[r]
-                if props and next(props) then
-                    local tr = rule_trans[r] or {}
-                    for n in matched[r] do
-                        local t = want[n] or {}
-                        want[n] = t
-                        for k, v in props do
-                            local val = resolve_token(v, sheets)
-                            if val ~= nil then t[k] = { val, tr[k] or tr["*"] } end
-                        end
-                    end
-                end
+            states = states or cs.states
+            if all or not c or (dirty and dirty[link]) or c.sheet ~= sheet or c.root ~= root then
+                c = { sheet = sheet, root = root, matches = match_link(link, root, cs) }
+                style_links[link] = c
             end
+            for _, nv in c.matches.list do
+                local t = want[nv[1]]
+                if not t then t = {} want[nv[1]] = t end
+                for k, v in nv[2] do t[k] = v end
+            end
+            for p in c.matches.pseudo do wanted_pseudo[p] = true end
         end
+    end
+    style_states = states
+    if sheets_changed then
+        local list = {}
+        for _, cs in style_compiled do
+            for _, s in cs.all_sheets do table.insert(list, s) end
+        end
+        G.style_sheets(list)
     end
     -- Apply, remembering originals; restore what nothing sets any more.
     -- A property the instance has set itself wins over every rule (Roblox's

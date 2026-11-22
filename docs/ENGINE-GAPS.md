@@ -377,9 +377,14 @@ identity.
 
 Performance: style matching ran over every descendant of each StyleLink's
 parent every frame, RobloxGui's 45 000 CoreScript modules included. It now
-skips scripts and their children and reruns only when the tree, tags, the
-hovered / pressed objects, rules or the view change (and every 2 s);
-destroyed-instance sweeps run twice a second.
+skips scripts and their children; destroyed-instance sweeps run twice a
+second. Round 3: matching reads each styled tree in one engine call
+(gui_input.rs `style_tree`) and only the elements holding a selector's
+first tag, and reruns per StyleLink only when the DataModel's journal shows
+its tree changed (an element added / moved / removed, a Name / Tags /
+Interactable write), for all links when a sheet, rule, query or the view
+changes (and hover / press / focus when a rule has a :state), with no 2 s
+timer. A rerun with the settings menu open: 150-250 ms -> 8-20 ms (debug).
 
 Look (round 3, compared with the real client's captures):
 - Styles no longer override what an instance sets itself (Roblox's styling

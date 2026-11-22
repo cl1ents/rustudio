@@ -836,18 +836,11 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(out)
         })?,
     )?;
-    // What style rule matching depends on besides rules and the view: the
-    // DataModel's tree, its tags, and the hovered / pressed objects
-    // (gui_input.luau step_styles reruns only when it changes).
+    // The hovered / pressed objects, as a key (gui_input.luau step_styles
+    // reruns matching when it changes and a rule has a :state).
     g.set(
         "style_key",
-        lua.create_function(|lua, ()| {
-            let (id, tree) = {
-                let w = world(lua)?;
-                let d = w.d();
-                (d.id, d.tree_revision)
-            };
-            let tags = crate::runtime::ext::TAG_REVISION.load(std::sync::atomic::Ordering::Relaxed);
+        lua.create_function(|_, ()| {
             let sh = crate::gui::share();
             let mut hover: u64 = 0;
             for r in sh.hovered.iter() {
@@ -862,7 +855,184 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
                 p.hash(&mut h);
                 hover ^= h.finish().rotate_left(1);
             }
-            Ok(format!("{id}:{tree}:{tags}:{hover}"))
+            Ok(format!("{hover}"))
+        })?,
+    )?;
+    // What a style sheet can style under `root` for StyleLink `link`, read
+    // in one call: root and its descendants but scripts and what they hold
+    // (RobloxGui.Modules' 45 000 CoreScript modules), as parallel lists of
+    // the instance, its parent's index (0: the root's), ClassName, Name and
+    // tags (a set, nil without tags). step_styles matched rules by reading
+    // these properties through the engine per rule and element: 150-250 ms
+    // a rerun with the settings menu open (debug build). The instances are
+    // kept as the link's scope for `style_changes`.
+    g.set(
+        "style_tree",
+        lua.create_function(|lua, (root, link): (Value, Value)| {
+            let Some(link) = opt_inst(&link) else { return Ok(Value::Nil) };
+            let Some(root) = opt_inst(&root) else { return Ok(Value::Nil) };
+            let mut nodes: Vec<(Ref, usize, String, String, Vec<String>)> = Vec::new();
+            {
+                let w = world(lua)?;
+                let d = w.d();
+                if d.dom.get_by_ref(root).is_none() {
+                    return Ok(Value::Nil);
+                }
+                let mut stack = vec![(root, 0usize)];
+                while let Some((r, parent)) = stack.pop() {
+                    let Some(i) = d.dom.get_by_ref(r) else { continue };
+                    let tags = match i.properties.get(&ustr("Tags")) {
+                        Some(Variant::Tags(t)) => t.iter().map(|s| s.to_string()).collect(),
+                        Some(Variant::BinaryString(b)) => rbx_dom_weak::types::Tags::decode(b.as_ref())
+                            .map(|t| t.iter().map(|s| s.to_string()).collect())
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    nodes.push((r, parent, i.class.to_string(), i.name.to_string(), tags));
+                    let index = nodes.len();
+                    for &c in i.children() {
+                        let script = d.dom.get_by_ref(c)
+                            .is_some_and(|ci| rustudio_core::doc::is_a(&ci.class, "LuaSourceContainer"));
+                        if !script {
+                            stack.push((c, index));
+                        }
+                    }
+                }
+            }
+            style_scope(lua).set_link(link, nodes.iter().map(|n| n.0).collect());
+            let n = nodes.len();
+            let (inst, parent, class, name, tags) = (
+                lua.create_table_with_capacity(n, 0)?,
+                lua.create_table_with_capacity(n, 0)?,
+                lua.create_table_with_capacity(n, 0)?,
+                lua.create_table_with_capacity(n, 0)?,
+                lua.create_table()?,
+            );
+            for (k, (r, p, c, nm, tg)) in nodes.into_iter().enumerate() {
+                let k = k + 1;
+                inst.raw_set(k, inst_value(lua, r)?)?;
+                parent.raw_set(k, p)?;
+                class.raw_set(k, c)?;
+                name.raw_set(k, nm)?;
+                if !tg.is_empty() {
+                    let set = lua.create_table_with_capacity(0, tg.len())?;
+                    for t in tg {
+                        set.raw_set(t, true)?;
+                    }
+                    tags.raw_set(k, set)?;
+                }
+            }
+            let out = lua.create_table_with_capacity(0, 7)?;
+            out.raw_set("n", n)?;
+            out.raw_set("inst", inst)?;
+            out.raw_set("parent", parent)?;
+            out.raw_set("class", class)?;
+            out.raw_set("name", name)?;
+            out.raw_set("tags", tags)?;
+            out.raw_set("outside", lua.create_table()?)?;
+            Ok(Value::Table(out))
+        })?,
+    )?;
+    // The style sheets matching read (each one's rules and derived sheets),
+    // for `style_changes`: replaces the last set.
+    g.set(
+        "style_sheets",
+        lua.create_function(|lua, sheets: Vec<Value>| {
+            let mut set = rustc_hash::FxHashSet::default();
+            {
+                let w = world(lua)?;
+                let d = w.d();
+                let mut stack: Vec<Ref> = sheets.iter().filter_map(opt_inst).collect();
+                while let Some(r) = stack.pop() {
+                    if set.insert(r) {
+                        if let Some(i) = d.dom.get_by_ref(r) {
+                            stack.extend_from_slice(i.children());
+                        }
+                    }
+                }
+            }
+            style_scope(lua).sheets = set;
+            Ok(())
+        })?,
+    )?;
+    g.set(
+        "style_forget",
+        lua.create_function(|lua, link: Value| {
+            if let Some(link) = opt_inst(&link) {
+                style_scope(lua).set_link(link, Vec::new());
+            }
+            Ok(())
+        })?,
+    )?;
+    // What changed for style matching since the last call, from the
+    // DataModel's journal: (true) everything (a sheet, or the journal was
+    // lost), else a set of the StyleLinks whose styled tree changed (an
+    // instance added, moved or removed there, or a Name / Tags /
+    // Interactable written), or nil. Changes elsewhere (a game's parts,
+    // properties GUI animations write) rerun nothing.
+    g.set(
+        "style_changes",
+        lua.create_function(|lua, ()| {
+            let mut w = world(lua)?;
+            let marks = match w.dm().marks_for(rustudio_core::doc::Reader::Styles) {
+                rustudio_core::doc::Marks::All => return Ok((true, Value::Nil)),
+                rustudio_core::doc::Marks::Some(m) => m,
+            };
+            if marks.is_empty() {
+                return Ok((false, Value::Nil));
+            }
+            let scope = style_scope(lua);
+            let d = w.d();
+            let names = [ustr("Name"), ustr("Tags"), ustr("Interactable")];
+            let sheet_names = [ustr("Selector"), ustr("Priority"), ustr("StyleSheet"), ustr("Attributes")];
+            let mut dirty: rustc_hash::FxHashSet<Ref> = rustc_hash::FxHashSet::default();
+            for m in &marks {
+                match *m {
+                    rustudio_core::doc::Mark::Prop(r, name) => {
+                        if scope.sheets.contains(&r) {
+                            if sheet_names.contains(&name) {
+                                return Ok((true, Value::Nil));
+                            }
+                        } else if names.contains(&name) || name == sheet_names[2] {
+                            // (a StyleLink's own StyleSheet: its tree's link)
+                            if let Some(links) = scope.nodes.get(&r) {
+                                dirty.extend(links.iter().copied());
+                            }
+                        }
+                    }
+                    rustudio_core::doc::Mark::Tree(r) => {
+                        // (itself: moved or removed from a styled tree; its
+                        // first ancestor in one: added there)
+                        if scope.sheets.contains(&r) {
+                            return Ok((true, Value::Nil));
+                        }
+                        if let Some(links) = scope.nodes.get(&r) {
+                            dirty.extend(links.iter().copied());
+                        }
+                        let mut p = d.dom.get_by_ref(r).map(|i| i.parent());
+                        while let Some(a) = p.filter(|a| a.is_some()) {
+                            if scope.sheets.contains(&a) {
+                                return Ok((true, Value::Nil));
+                            }
+                            if let Some(links) = scope.nodes.get(&a) {
+                                dirty.extend(links.iter().copied());
+                                break;
+                            }
+                            p = d.dom.get_by_ref(a).map(|i| i.parent());
+                        }
+                    }
+                }
+            }
+            drop(scope);
+            drop(w);
+            if dirty.is_empty() {
+                return Ok((false, Value::Nil));
+            }
+            let out = lua.create_table_with_capacity(0, dirty.len())?;
+            for r in dirty {
+                out.raw_set(inst_value(lua, r)?, true)?;
+            }
+            Ok((false, Value::Table(out)))
         })?,
     )?;
     g.set(
@@ -1138,6 +1308,44 @@ pub fn focus_now(lua: &Lua) {
     if let Ok(f) = module(lua).and_then(|m| m.get::<Function>("focus_now")) {
         let _ = f.call::<()>(());
     }
+}
+
+/// What style matching last read (gui_input.luau step_styles), for
+/// `style_changes` to tell which StyleLinks a journal mark touches.
+#[derive(Default)]
+struct StyleScope {
+    /// Instance → the StyleLinks whose styled tree holds it.
+    nodes: rustc_hash::FxHashMap<Ref, Vec<Ref>>,
+    /// StyleLink → the instances `style_tree` listed for it.
+    by_link: rustc_hash::FxHashMap<Ref, Vec<Ref>>,
+    /// The sheets' instances (rules, derives, the sheets).
+    sheets: rustc_hash::FxHashSet<Ref>,
+}
+
+impl StyleScope {
+    fn set_link(&mut self, link: Ref, nodes: Vec<Ref>) {
+        for r in self.by_link.remove(&link).unwrap_or_default() {
+            if let Some(links) = self.nodes.get_mut(&r) {
+                links.retain(|l| *l != link);
+                if links.is_empty() {
+                    self.nodes.remove(&r);
+                }
+            }
+        }
+        for &r in &nodes {
+            self.nodes.entry(r).or_default().push(link);
+        }
+        if !nodes.is_empty() {
+            self.by_link.insert(link, nodes);
+        }
+    }
+}
+
+fn style_scope(lua: &Lua) -> mlua::AppDataRefMut<'_, StyleScope> {
+    if lua.app_data_ref::<StyleScope>().is_none() {
+        lua.set_app_data(StyleScope::default());
+    }
+    lua.app_data_mut::<StyleScope>().expect("style scope")
 }
 
 pub fn step(lua: &Lua, dt: f64) -> mlua::Result<()> {

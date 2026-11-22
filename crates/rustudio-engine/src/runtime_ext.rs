@@ -2752,11 +2752,7 @@ fn tags_of(lua: &Lua, r: Ref) -> mlua::Result<Vec<String>> {
     )
 }
 
-/// Bumped on every tag change (gui_input's style rules match tags).
-pub static TAG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 fn set_tags(lua: &Lua, r: Ref, tags: Vec<String>) -> mlua::Result<()> {
-    TAG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut w = world(lua)?;
     let mut old = None;
     if let Some(i) = w.dm().dom.get_by_ref_mut(r) {

@@ -124,9 +124,12 @@ pub enum Reader {
     RenderSnapshot = 21,
     /// Animator bindings to joints and bones in a rig.
     AnimatorBindings = 22,
+    /// The styled GUI trees and style sheets style rule matching read
+    /// (crates/rustudio-engine/src/domains/gui_input.rs `style_changes`).
+    Styles = 23,
 }
 
-const JOURNAL_READERS: usize = Reader::AnimatorBindings as usize + 1;
+const JOURNAL_READERS: usize = Reader::Styles as usize + 1;
 
 /// What a reader gets back: everything changed (rebuild), or the new marks.
 pub enum Marks {
