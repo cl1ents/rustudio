@@ -137,19 +137,16 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
             let f: Function = m.get(format!("{owner}.{name}"))?;
             f.call(args.clone())
         }
-        // A model from the client's own content (rbxasset://), for the
-        // CoreScripts' bundled models: content/, else Studio's ExtraContent
-        // (rbxasset://models/ServerCoreScripts.rbxm lives in
-        // ExtraContent/models). Its one top instance, parentless.
+        // A model from the client's own content (rbxasset://, ExtraContent
+        // included: assets::resolve), for the CoreScripts' bundled models.
+        // Its one top instance, parentless.
         "LoadLocalAsset" => {
             let id = name_arg(args, name)?;
-            let rest = id.trim().strip_prefix("rbxasset://").ok_or_else(|| rt_err(format!("LoadLocalAsset: {id} is not an rbxasset:// path")))?;
+            if !id.trim().starts_with("rbxasset://") {
+                return Err(rt_err(format!("LoadLocalAsset: {id} is not an rbxasset:// path")));
+            }
             let path = rustudio_core::assets::resolve(&id, None)
                 .filter(|p| p.is_file())
-                .or_else(|| {
-                    let p = rustudio_core::default_scripts::studio_dir()?.join("ExtraContent").join(rest.trim_start_matches('/'));
-                    (p.is_file() && !rest.contains("..")).then_some(p)
-                })
                 .ok_or_else(|| rt_err(format!("LoadLocalAsset: {id} not found")))?;
             let bytes = std::fs::read(&path).map_err(|e| rt_err(format!("LoadLocalAsset: {e}")))?;
             let mut tmp = rustudio_core::doc::Document::decode(&bytes).map_err(|e| rt_err(format!("LoadLocalAsset: {e}")))?;
@@ -225,5 +222,92 @@ pub(super) fn call(lua: &Lua, owner: &str, name: &str, args: &MultiValue) -> mlu
             name_arg(args, name)?;
             Ok(MultiValue::from_iter([Value::Boolean(false)]))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rbx_dom_weak::InstanceBuilder;
+    use rustudio_core::core_scripts::{Bytecode, Installed};
+    use rustudio_core::doc::Document;
+
+    use crate::runtime::*;
+
+    fn compile(src: &str) -> Bytecode {
+        Bytecode::from(crate::bytecode_cache::compiler().compile(src).unwrap())
+    }
+
+    /// Runs `starter` as the data model patch's StarterScript in a Play
+    /// client, with `CoreScripts/Child` and a CorePackages module `Lib`;
+    /// then a game LocalScript-identity check. Returns Output.
+    fn run_core(starter: &str) -> Vec<String> {
+        let mut d = Document::new_place();
+        let root = d.dom.root_ref();
+        let packages = d.dom.insert(root, InstanceBuilder::new("CorePackages").with_name("CorePackages"));
+        let lib = d.dom.insert(packages, InstanceBuilder::new("ModuleScript").with_name("Lib"));
+        d.dom.insert(root, InstanceBuilder::new("CoreGui").with_name("CoreGui"));
+        let installed = Installed {
+            modules: HashMap::from([(lib, compile("return { n = 7 }"))]),
+            scripts: HashMap::from([
+                ("StarterScript".to_string(), compile(starter)),
+                ("CoreScripts/Child".to_string(), compile("print('child', script:GetFullName(), debug.info(1, 's'))")),
+            ]),
+        };
+        let rt = Runtime::new().unwrap();
+        let mut w = World::new(d, RunMode::Play);
+        w.side = Side::Client;
+        rt.enter(w);
+        rt.bind_globals().unwrap();
+        rt.start_core_scripts(installed).unwrap();
+        for _ in 0..10 {
+            rt.step(1.0 / 60.0);
+        }
+        rt.leave().output.into_iter().map(|(_, t)| t).collect()
+    }
+
+    #[test]
+    fn core_scripts_run_at_their_identity_with_their_services() {
+        let out = run_core(
+            r#"
+            local sg = game:GetService("StarterGui")
+            print("flag", game:DefineFastFlag("X", true), game:GetFastFlag("X"), game:GetFastFlag("Undefined"))
+            sg:RegisterSetCore("Greet", function(v) print("setcore", v) end)
+            sg:RegisterGetCore("Answer", function() return 42 end)
+            sg:SetCore("Greet", "hi")
+            print("getcore", sg:GetCore("Answer"))
+            print("unregistered", pcall(sg.SetCore, sg, "Nope", 1))
+            local mb = game:GetService("MessageBusService")
+            local id = mb:GetMessageId("Domain", "Name")
+            local conn = mb:Subscribe(id, function(p) print("bus", p.n) end, false, false)
+            mb:Publish(id, { n = 1 })
+            conn:Disconnect()
+            mb:Publish(id, { n = 2 })
+            print("last", mb:GetLast(id).n, id, mb:GetProtocolMethodResponseMessageId("P", "M"))
+            local mem = game:GetService("MemStorageService")
+            mem:Bind("k", function(v) print("mem", v) end)
+            mem:SetItem("k", "a")
+            print("memget", mem:GetItem("k", "d"), mem:GetItem("missing", "d"), mem:HasItem("k"))
+            print("lerp", UDim2.new(0, 0, 0, 0):lerp(UDim2.new(1, 10, 0, 0), 0.5))
+            print("starter", script.Parent and script.Parent.Name, debug.info(1, "s"))
+            game:GetService("ScriptContext"):AddCoreScriptLocal("CoreScripts/Child", game:GetService("CoreGui"))
+            print("lib", require(game:GetService("CorePackages").Lib).n)
+            "#,
+        );
+        let has = |s: &str| out.iter().any(|t| t.starts_with(s));
+        assert!(has("flag true true false"), "{out:?}");
+        assert!(has("setcore hi"), "{out:?}");
+        assert!(has("getcore 42"), "{out:?}");
+        assert!(has("unregistered false SetCore: Nope has not been registered by the CoreScripts"), "{out:?}");
+        assert!(has("bus 1"), "{out:?}");
+        assert!(!has("bus 2"), "{out:?}");
+        assert!(has("last 2 Domain.Name P.M.Response"), "{out:?}");
+        assert!(has("mem a"), "{out:?}");
+        assert!(has("memget a d true"), "{out:?}");
+        assert!(has("lerp {0.5, 5}, {0, 0}"), "{out:?}");
+        assert!(has("starter CoreGui StarterScript"), "{out:?}");
+        assert!(has("child CoreGui.CoreScripts/Child CoreGui.CoreScripts/Child"), "{out:?}");
+        assert!(has("lib 7"), "{out:?}");
     }
 }

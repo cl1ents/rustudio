@@ -734,6 +734,7 @@ impl Walk<'_, '_> {
         }
         let font = font_of(d, r);
         let family = self.gui.family(self.ctx, self.input.store, &font);
+        let text = super::ligatures::apply(&family, text);
         let size = num(d, r, "TextSize", 14.0) * scale * legacy_text_scale(&font);
         let k = self.em_per_size(&family);
         let mut f = TextFormat::simple(FontId::new(size * k, family), Color32::WHITE);
@@ -1738,6 +1739,7 @@ impl Walk<'_, '_> {
         }
         let font = font_of(d, r);
         let family = self.gui.family(self.ctx, self.input.store, &font);
+        let text = super::ligatures::apply(&family, text);
         let bold_face = font.1 >= 600;
         let rich = boolp(d, r, "RichText", false);
         let wrapped = boolp(d, r, "TextWrapped", false);

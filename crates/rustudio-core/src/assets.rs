@@ -322,6 +322,23 @@ pub fn resolve(id: &str, doc_dir: Option<&Path>) -> Option<PathBuf> {
             {
                 return Some(alt);
             }
+            // ... or in its ExtraContent, which the client serves under
+            // rbxasset:// too (the CoreScripts' icon font,
+            // rbxasset://LuaPackages/Packages/_Index/BuilderIcons/…, and
+            // rbxasset://models/ServerCoreScripts.rbxm live there).
+            if let Some(alt) = content_dir()
+                .canonicalize()
+                .ok()
+                .and_then(|c| c.parent().map(|s| s.join("ExtraContent").join(rest)))
+                .filter(|a| a.is_file())
+                .or_else(|| {
+                    crate::default_scripts::studio_dir()
+                        .map(|s| s.join("ExtraContent").join(rest))
+                        .filter(|a| a.is_file())
+                })
+            {
+                return Some(alt);
+            }
             // The retired death sound: Studio plays sounds/oof.ogg (its 2022
             // replacement) for it; rustudio plays the classic Oof once fetched.
             if matches!(rest.to_ascii_lowercase().as_str(), "sounds/uuhhh.mp3" | "sounds/uuhhh.wav") {

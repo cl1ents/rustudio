@@ -772,13 +772,33 @@ impl Gui {
         };
         let mut layered: Vec<Ref> = Vec::new();
         // With Roblox's CoreScripts on (core_scripts.rs) the client's CoreGui
-        // draws too, above every PlayerGui, as in a Roblox client.
+        // draws too, above every PlayerGui, as in a Roblox client; there a
+        // ScreenGui in a Folder draws as well (the CoreScripts mount their
+        // apps in Folders: CoreGui.TopBarApp), as the edit view's CoreGui does.
         let core_gui = (inp.playing && inp.roots == Roots::View && rustudio_core::rustudio_settings::core_scripts())
             .then(|| d.find_child(root, "CoreGui"))
             .flatten();
-        let parents = screen_parent.map(|p| (p, 1_000_000)).into_iter().chain(core_gui.map(|c| (c, 2_000_000)));
-        for (pg, order_base) in parents {
-            for g in children(d, pg) {
+        let in_folders = |top: Ref| {
+            let mut out = Vec::new();
+            let mut stack: Vec<Ref> = children(d, top);
+            stack.reverse();
+            while let Some(g) = stack.pop() {
+                if d.class_of(g).as_deref() == Some("Folder") {
+                    let mut kids = children(d, g);
+                    kids.reverse();
+                    stack.extend(kids);
+                } else {
+                    out.push(g);
+                }
+            }
+            out
+        };
+        let parents = screen_parent
+            .map(|p| (children(d, p), 1_000_000))
+            .into_iter()
+            .chain(core_gui.map(|c| (in_folders(c), 2_000_000)));
+        for (list, order_base) in parents {
+            for g in list {
                 let Some(class) = d.class_of(g) else { continue };
                 if !boolp(d, g, "Enabled", true) {
                     continue;

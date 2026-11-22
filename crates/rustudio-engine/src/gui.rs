@@ -35,6 +35,8 @@ mod walk;
 mod fx;
 #[path = "gui_adorn.rs"]
 mod adorn;
+#[path = "gui_ligatures.rs"]
+mod ligatures;
 
 /// Where a GuiObject ended up (the values scripts read as AbsolutePosition /
 /// AbsoluteSize / AbsoluteRotation), plus its text's size (TextBounds).
@@ -1291,6 +1293,7 @@ impl Gui {
             }
         };
         let name = format!("rbx:{path}");
+        ligatures::note_face(&name, &bytes);
         let family = FontFamily::Name(name.clone().into());
         ctx.add_font(egui::epaint::text::FontInsert::new(
             &name,
