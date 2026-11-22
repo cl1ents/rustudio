@@ -260,6 +260,10 @@ pub struct World {
     /// ones or freed any (`Runtime::gc_step` works faster then).
     pub orphans_seen: usize,
     pub gc_busy: bool,
+    /// Roblox's CoreScripts and CorePackages put in this DataModel
+    /// (`Runtime::install_core_scripts`): the modules' bytecode by instance
+    /// and the CoreScripts by name.
+    pub core_scripts: rustudio_core::core_scripts::Installed,
 }
 
 impl World {
@@ -681,6 +685,7 @@ impl World {
             abs_all: true,
             orphans_seen: 0,
             gc_busy: true,
+            core_scripts: Default::default(),
             requests: Default::default(),
             input: Default::default(),
             started: HashSet::new(),
@@ -6394,6 +6399,20 @@ impl Runtime {
         }
     }
 
+    /// Takes the CoreScripts core_scripts::install put in this side's
+    /// DataModel and starts the engine's entry CoreScript, StarterScript
+    /// (core_scripts.rs), which adds the others.
+    pub fn start_core_scripts(&self, installed: rustudio_core::core_scripts::Installed) -> Result<(), String> {
+        if let Ok(mut w) = world(&self.lua) {
+            w.core_scripts = installed;
+        }
+        match start_core_script(&self.lua, "StarterScript", Ref::none()) {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err("the data model patch has no StarterScript".into()),
+            Err(e) => Err(describe_error(&e)),
+        }
+    }
+
     /// Builds this side's world-query cache (rays, region queries) ahead of
     /// the first script query.
     pub fn warm_queries(&self) {
@@ -7038,7 +7057,7 @@ pub(crate) fn place_chunk_name(full_name: &str) -> String {
 
 /// Compiles a script's Source with `script` bound in its own environment.
 fn compile_script(lua: &Lua, r: Ref, shared: &Table) -> mlua::Result<Function> {
-    let (source, name) = {
+    let (source, name, core) = {
         let w = world(lua)?;
         let src = match w.d().prop(r, "Source") {
             Some(Variant::String(s)) => s,
@@ -7046,7 +7065,7 @@ fn compile_script(lua: &Lua, r: Ref, shared: &Table) -> mlua::Result<Function> {
         };
         // A name with a NUL in it (an Place B script) can't be a chunk
         // name; Studio runs the script all the same.
-        (src, w.full_name(r).replace('\0', ""))
+        (src, w.full_name(r).replace('\0', ""), w.core_scripts.modules.get(&r).cloned())
     };
     let memory_category=domains::assets_cloud::scene::begin(lua,r)?;
     let result=(|| {
@@ -7058,6 +7077,14 @@ fn compile_script(lua: &Lua, r: Ref, shared: &Table) -> mlua::Result<Function> {
     let env = crate::globals_parity::new_env(lua, Some(inst_value(lua, r)?))?;
     // A Script inside a loaded plugin's tree also gets `plugin`.
     domains::script_env(lua, r, &env)?;
+    // A module from Studio's data model patch (CorePackages, RobloxGui's
+    // Modules): Roblox's own bytecode.
+    if let Some(b) = core {
+        return lua.load(&b[..]).set_mode(mlua::chunk::ChunkMode::Binary)
+            .set_name(place_chunk_name(&name))
+            .set_environment(env)
+            .into_function();
+    }
     // Big sources compile once (the other side of Play, the next run):
     // bytecode_cache.rs.
     match crate::bytecode_cache::get(&source) {
@@ -7073,6 +7100,35 @@ fn compile_script(lua: &Lua, r: Ref, shared: &Table) -> mlua::Result<Function> {
     })();
     domains::assets_cloud::scene::restore(lua,memory_category)?;
     result
+}
+
+/// Starts the CoreScript `name` of Studio's data model patch
+/// (`PatchRoot.CoreScripts`, core_scripts.rs) as a CoreScript instance under
+/// `parent` (none: parentless, as the engine's own StarterScript), at the
+/// CoreScript identity. Its chunk is `=` + its full name, the names Roblox
+/// reports (`StarterScript`, `CoreGui.RobloxGui.CoreScripts/<Name>`) and
+/// security::internal_chunk knows. None when the patch has no such script.
+pub(crate) fn start_core_script(lua: &Lua, name: &str, parent: Ref) -> mlua::Result<Option<Ref>> {
+    let (r, code, full) = {
+        let mut w = world(lua)?;
+        let Some(code) = w.core_scripts.scripts.get(name).cloned() else { return Ok(None) };
+        let r = w.dm().dom.insert(parent, InstanceBuilder::new("CoreScript").with_name(name));
+        if parent.is_none() {
+            w.orphans.insert(r);
+        } else {
+            w.dm().mark_tree(r);
+        }
+        w.structure_changed = true;
+        w.started.insert(r);
+        let full = w.full_name(r);
+        (r, code, full)
+    };
+    let env = crate::globals_parity::new_env(lua, Some(inst_value(lua, r)?))?;
+    let f = lua.load(&code[..]).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={full}")).set_environment(env).into_function()?;
+    let th = domains::assets_cloud::scene::create_thread(lua, f)?;
+    security::set(&th, security::CORE);
+    resume(lua, &th, vec![]);
+    Ok(Some(r))
 }
 
 // ------------------------------------------------------- client ↔ server

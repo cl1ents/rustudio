@@ -366,6 +366,8 @@ fn internal_chunk(src: &[u8]) -> bool {
     s.starts_with(b"rustudio.")
         || s.starts_with(b"gui_input.")
         || s.starts_with(b"CoreGui.RobloxGui.CoreScripts/")
+        // The data model patch's entry CoreScript (runtime start_core_script).
+        || s == b"StarterScript"
         || s == b"StudioTestService"
         || s == b"geometry_ops"
         || s == b"geometry_nav"

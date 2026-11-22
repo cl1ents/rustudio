@@ -1351,6 +1351,7 @@ impl Game {
             return;
         };
         let mut local = Vec::new();
+        let mut core = None;
         if let Some(cdoc) = self.play.as_mut().and_then(|s| s.other_doc.as_mut()) {
             let root = cdoc.dom.root_ref();
             if let Some(players) = cdoc.find_child(root, "Players") {
@@ -1429,8 +1430,24 @@ impl Game {
                     local.push(i.referent());
                 }
             }
+            // Roblox's own CoreScripts, opt-in (core_scripts.rs): CorePackages
+            // and CoreGui.RobloxGui from Studio's data model patch.
+            if rustudio_core::rustudio_settings::core_scripts() {
+                core = Some(load_core_scripts(cdoc));
+            }
         }
         self.sync_view_size();
+        match core {
+            Some(Ok((installed, note))) => {
+                self.info(note);
+                let started = self.with_side(Side::Client, |rt, _, _| rt.start_core_scripts(installed));
+                if let Some(Err(e)) = started {
+                    self.error(format!("CoreScripts: {e}"));
+                }
+            }
+            Some(Err(e)) => self.error(e),
+            None => {}
+        }
         self.with_side(Side::Client, |rt, _, _| {
             for r in local {
                 rt.start_collected(r);
@@ -4035,6 +4052,25 @@ fn script_enabled(d: &Document, r: Ref) -> bool {
 fn kept_on_spawn(d: &Document, r: Ref) -> bool {
     d.class_of(r).is_some_and(|c| doc::is_a(&c, "LayerCollector"))
         && matches!(d.prop(r, "ResetOnSpawn"), Some(Variant::Bool(false)))
+}
+
+/// Puts Studio's data model patch in the client's DataModel
+/// (core_scripts::install). Returns what to start and a line for Output.
+fn load_core_scripts(cdoc: &mut Document) -> Result<(rustudio_core::core_scripts::Installed, String), String> {
+    let path = rustudio_core::core_scripts::patch_path().ok_or_else(|| {
+        format!("CoreScripts: no {} in the Studio install", rustudio_core::core_scripts::PATCH)
+    })?;
+    let t0 = std::time::Instant::now();
+    let patch = rustudio_core::core_scripts::read(&path).map_err(|e| format!("CoreScripts: {e}"))?;
+    let installed = rustudio_core::core_scripts::install(cdoc, patch).map_err(|e| format!("CoreScripts: {e}"))?;
+    let note = format!(
+        "CoreScripts: {} modules and {} CoreScripts from {} ({} ms)",
+        installed.modules.len(),
+        installed.scripts.len(),
+        path.display(),
+        t0.elapsed().as_millis()
+    );
+    Ok((installed, note))
 }
 
 fn client_scripts(cd: &Document, under: &[Option<Ref>]) -> Vec<Ref> {

@@ -27,6 +27,8 @@ use rbx_dom_weak::types::{Ref, Variant};
 
 use crate::runtime::*;
 
+#[path = "services_core.rs"]
+mod core_members;
 #[path = "services_encoding.rs"]
 pub(crate) mod encoding;
 #[path = "services_http.rs"]
@@ -45,6 +47,36 @@ pub const METHODS: &[(&str, &str)] = &[
     ("GetMessage", "DataModel"),
     ("GetRemoteBuildMode", "DataModel"),
     ("IsGearTypeAllowed", "DataModel"),
+    ("DefineFastFlag", "DataModel"),
+    ("DefineFastInt", "DataModel"),
+    ("DefineFastString", "DataModel"),
+    ("GetFastFlag", "DataModel"),
+    ("GetFastInt", "DataModel"),
+    ("GetFastString", "DataModel"),
+    ("GetEngineFeature", "DataModel"),
+    ("SetFlagVersion", "DataModel"),
+    ("GetPlaySessionId", "DataModel"),
+    ("AddCoreScriptLocal", "ScriptContext"),
+    ("GetPlatform", "UserInputService"),
+    ("GetNotificationTypeList", "GuiService"),
+    ("GetMessageId", "MessageBusService"),
+    ("GetProtocolMethodRequestMessageId", "MessageBusService"),
+    ("GetProtocolMethodResponseMessageId", "MessageBusService"),
+    ("Subscribe", "MessageBusService"),
+    ("SubscribeToProtocolMethodRequest", "MessageBusService"),
+    ("SubscribeToProtocolMethodResponse", "MessageBusService"),
+    ("Publish", "MessageBusService"),
+    ("GetLast", "MessageBusService"),
+    ("Call", "MessageBusService"),
+    ("PublishProtocolMethodRequest", "MessageBusService"),
+    ("PublishProtocolMethodResponse", "MessageBusService"),
+    ("SetRequestHandler", "MessageBusService"),
+    ("MakeRequest", "MessageBusService"),
+    ("Disconnect", "MessageBusConnection"),
+    ("GetItem", "LocalStorageService"),
+    ("SetItem", "LocalStorageService"),
+    ("Flush", "LocalStorageService"),
+    ("WhenLoaded", "LocalStorageService"),
     ("BindToSimulation", "RunService"),
     ("BindToAnimation", "RunService"),
     ("GetPredictionStatus", "RunService"),
@@ -161,6 +193,8 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("MessageOut", "LogService"),
     // Fired at once by the logger's own calls, on it and the loggers above it.
     ("MessageOut", "Logger"),
+    // LocalStorageService:SetItem (services_core.luau).
+    ("ItemWasSet", "LocalStorageService"),
     // Source links and SetValue (services `newindex`, services.luau).
     ("ReceiverConnected", "CustomEvent"),
     ("ReceiverDisconnected", "CustomEvent"),
@@ -224,6 +258,8 @@ struct State {
     physics_step: f64,
     /// HttpService:CreateWebStreamClient's clients (their objects' Refs).
     streams: Streams,
+    /// DataModel:DefineFastFlag and friends (services_core.rs).
+    fast_flags: core_members::FastFlags,
 }
 
 /// A WebStreamClient: its connection (`stream` module) and state.
@@ -360,6 +396,11 @@ fn call_inner(lua: &Lua, name: &str, owner: &str, class: &str, this: Ref, args: 
             enum_arg(args, 1, "GearType")?;
             ok(Value::Boolean(false))
         }
+        ("DataModel", "DefineFastFlag" | "DefineFastInt" | "DefineFastString" | "GetFastFlag" | "GetFastInt" | "GetFastString" | "GetEngineFeature" | "SetFlagVersion" | "GetPlaySessionId")
+        | ("ScriptContext", "AddCoreScriptLocal")
+        | ("UserInputService", "GetPlatform")
+        | ("GuiService", "GetNotificationTypeList")
+        | ("MessageBusService" | "MessageBusConnection" | "LocalStorageService", _) => core_members::call(lua, owner, name, args),
 
         // ---------------------------------------------------- RunService
         ("RunService", "BindToSimulation" | "BindToAnimation") => lcall(lua, name, args.clone()),
@@ -1632,8 +1673,9 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
     let m: Table = lua
         .load(include_str!("services.luau"))
         .set_name("=rustudio.services")
-        .call(rs)?;
+        .call(rs.clone())?;
     lua.set_named_registry_value("svc_impl", m)?;
+    core_members::install(lua, &rs)?;
     let start = lua.create_function(http_start)?;
     let poll = lua.create_function(http_poll)?;
     lua.load(HTTP_LUA).set_name("=rustudio.services.http").call::<()>((start, poll))?;

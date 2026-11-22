@@ -305,6 +305,46 @@ rustudio's `os.clock` now counts like Studio's (from the process start) and
 the harness passes Studio's reading at Play (`RUSTUDIO_CLOCK_BASE`): Place A
 camera 75 → 100 with the 2° tolerance unchanged.
 
+## Roblox's CoreScripts from the data model patch (opt-in)
+
+`RUSTUDIO_CORE_SCRIPTS=1` (or Studio Settings > rustudio > Play > Roblox's
+CoreScripts) makes Play put Studio's `DataModelPatch.rbxm` in the client
+(crates/rustudio-core/src/core_scripts.rs) and start its `StarterScript` at
+the CoreScript identity (4). Measured on the control place with Studio
+version-8d7a1009c17e4ff8's patch: 49190 modules and 79 CoreScripts in place
+in about 350 ms; StarterScript runs, adds
+`CoreScripts/CoreScriptErrorReporter`, and requires its way through Roact,
+the Scheduler, CachedPolicyService and the Flags modules. Closed on the way
+(all RobloxScriptSecurity in the API dump, domains/services_core.rs):
+ScriptContext:AddCoreScriptLocal, DataModel:DefineFast{Flag,Int,String} /
+GetFast* / GetEngineFeature / SetFlagVersion / GetPlaySessionId,
+UserInputService:GetPlatform, GuiService:GetNotificationTypeList,
+MessageBusService (publish / subscribe, protocol requests) and
+LocalStorageService / AppStorageService (session-only items).
+
+First blocker now: `GetResolutionScale is not a valid member of GuiService`
+(StarterScript line 30's requires stop there, so no top bar, chat or menu is
+drawn yet; the game itself plays on). Flag values are the CoreScripts' own
+defaults and every engine feature reads false (estimates: rustudio has no
+served flag settings).
+
+Still missing, by a static pass over the patch's bytecode string constants
+against the API dump and rustudio's sources (candidates, not each confirmed
+by a run): GuiService (GetResolutionScale, GetSafeZoneOffsets,
+SetTopbarInset, SetGlobalGuiInset, SetMenuIsOpen, BroadcastNotification,
+GetErrorMessage / GetErrorCode, AddCenterDialog, CoreGuiFolder…),
+StarterGui:RegisterSetCore / RegisterGetCore (every SetCore / GetCore the
+CoreScripts serve), ContextActionService:BindCoreActionAtPriority /
+GetAllBoundCoreActionInfo, RunService:GetRobloxVersion / GetCoreScriptVersion
+/ SetRobloxGuiFocused, TextChatService's chat-window members (ChatIsLoaded,
+GetTextChannelWindows, SendExpChat*, CoreMessageReceived,
+OnIncomingMessageEvent), Player block / friend members (GetFriendStatus,
+HasBlockedPlayer, BlockListChanged…), VRService (VRSessionState,
+IsVRAppBuild…), ExperienceService, RbxAnalyticsService (GetSessionId,
+ReportCounter…), UserGameSettings (ChatVisible, PlayerListVisible,
+UIScaleMultiplierHundredths…), CoreGui:TakeScreenshot, ScreenGui
+OnTopOfCoreBlur, GuiBase2d TotalGroupScale.
+
 ## Next (open, by how much they block real games)
 
 1. **Soft spot lights** (render): Studio spreads a SpotLight's light well
