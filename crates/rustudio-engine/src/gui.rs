@@ -1921,15 +1921,15 @@ mod tests {
     /// fades with it).
     #[test]
     fn rich_text_colour_attributes() {
-        let runs = rich_runs("<font color = \"rgb(0, 255, 0)\">ev1:</font> hi");
+        let runs = rich_runs("<font color = \"rgb(0, 255, 0)\">Player1:</font> hi");
         assert_eq!(runs[0].color, Some([0.0, 1.0, 0.0]));
         assert_eq!(runs[1].color, None);
-        let runs = rich_runs("<font color='#02b857'>ev1:</font>");
+        let runs = rich_runs("<font color='#02b857'>Player1:</font>");
         assert_eq!(runs[0].color, Some([2.0 / 255.0, 184.0 / 255.0, 87.0 / 255.0]));
         let runs = rich_runs(
-            "<font transparency='1.0' size='18'><stroke transparency='1.0'>Roblox_User_777:</stroke></font> hello",
+            "<font transparency='1.0' size='18'><stroke transparency='1.0'>Player2:</stroke></font> hello",
         );
-        assert_eq!(runs[0].text, "Roblox_User_777:");
+        assert_eq!(runs[0].text, "Player2:");
         assert_eq!(runs[0].transparency, Some(1.0));
         assert_eq!(runs[1].transparency, None);
     }

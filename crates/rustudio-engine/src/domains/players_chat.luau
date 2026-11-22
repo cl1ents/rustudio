@@ -360,7 +360,7 @@ end
 -- colour, its team's colour on a team, else the colour its Name hashes to
 -- (RobloxPlayer formats it with `<font color="#{}">{}</font>`; the palette
 -- and hash are the CoreScripts' ChatUIPrimitives computeNameColor, which
--- gives "ev1" the green the real chat draws it in).
+-- matches the colours the Roblox client's chat draws names in).
 local NAME_COLORS = {
 	Color3.new(253 / 255, 41 / 255, 67 / 255),
 	Color3.new(1 / 255, 162 / 255, 1),

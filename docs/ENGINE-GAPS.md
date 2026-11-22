@@ -404,7 +404,7 @@ Look (round 3, compared with the real client's captures):
   Resume row and the Help tab's grid draw over the menu's background, not
   dimmed under it.
 - The default chat PrefixText is `<font color="#…">DisplayName:</font>` in
-  the team colour, else the CoreScripts' computeNameColor colour (ev1 green);
+  the team colour, else the CoreScripts' computeNameColor colour;
   RobloxEmoji's colour glyphs (the verified badge U+E000) draw in their COLR
   layers' colours (gui_color_glyphs.rs); rich text `color = "…"` with spaces
   parses.

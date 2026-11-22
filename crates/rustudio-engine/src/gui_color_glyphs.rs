@@ -257,11 +257,11 @@ mod tests {
         let Some(_) = face() else { return };
         let mut job = LayoutJob::default();
         let format = TextFormat::simple(egui::FontId::proportional(14.0), Color32::from_rgb(10, 200, 30));
-        append(&mut job, "ev1\u{E000}:", format);
+        append(&mut job, "Player1\u{E000}:", format);
         let texts: Vec<&str> =
             job.sections.iter().map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
         assert_eq!(texts.len(), 4, "{texts:?}");
-        assert_eq!(texts[0], "ev1");
+        assert_eq!(texts[0], "Player1");
         assert_eq!(texts[3], ":");
         assert_eq!(job.sections[1].format.color, Color32::from_rgb(0, 102, 255));
         assert_eq!(job.sections[3].format.color, Color32::from_rgb(10, 200, 30));
