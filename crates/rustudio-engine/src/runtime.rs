@@ -10529,7 +10529,7 @@ mod weld_offset_tests {
             ],
             accessories: Vec::new(),
             body_parts: Vec::new(),
-            head: None,
+            head: Vec::new(),
             animations: Vec::new(),
             emotes: Vec::new(),
             skipped: Vec::new(),
