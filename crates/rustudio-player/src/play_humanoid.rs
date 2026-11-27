@@ -983,7 +983,8 @@ impl Game {
         if let Some(c) = s.physics.humanoid_ctl(model) {
             ch.dynamic.hum = c.hum.clone();
         }
-        let Some((mut root_xf, v, _w)) = s.physics.humanoid_root(model) else { return };
+        // (As drawn: between two level-2 solves, part-way along the last one.)
+        let Some((mut root_xf, v, _w)) = s.physics.humanoid_root_shown(model) else { return };
         // A script moved the root while the world stepped (a server Script or
         // LocalScript resumed between stepHumanoid and the publish, the
         // harness's --luau): its CFrame wins and the body goes there instead of
