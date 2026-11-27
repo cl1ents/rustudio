@@ -55,12 +55,13 @@ pub struct AvatarLook {
     pub skipped: Vec<String>,
 }
 
-/// A content property, under its classic name or the newer `…Content` name
-/// files are migrated to (e.g. ShirtTemplate → ShirtTemplateContent).
+/// A content property, under its classic name or the newer `…Content` twin
+/// files are migrated to (e.g. ShirtTemplate → ShirtTemplateContent,
+/// ShirtGraphic's Graphic → TextureContent).
 fn content_of(dom: &WeakDom, class: &str, prop: &str) -> Option<String> {
     let i = dom.descendants().find(|i| i.class == class)?;
-    [prop.to_string(), format!("{prop}Content")]
-        .iter()
+    std::iter::once(prop)
+        .chain(doc::content_twin(prop))
         .find_map(|name| match i.properties.get(&ustr(name)) {
             Some(Variant::ContentId(c)) => Some(c.as_str().to_string()),
             Some(Variant::Content(c)) => c.as_uri().map(str::to_string),

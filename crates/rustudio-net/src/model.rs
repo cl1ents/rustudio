@@ -512,10 +512,9 @@ impl LiveModel {
 fn content_legacy_names(twin: &str) -> &'static [&'static str] {
     match twin {
         "MeshContent" => &["MeshId"],
-        "TextureContent" => &["TextureID", "TextureId", "Texture"],
+        "TextureContent" => &["TextureID", "TextureId", "Texture", "Graphic"],
         "ShirtTemplateContent" => &["ShirtTemplate"],
         "PantsTemplateContent" => &["PantsTemplate"],
-        "GraphicContent" => &["Graphic"],
         "ImageContent" => &["Image"],
         "ColorMapContent" => &["ColorMap"],
         "NormalMapContent" => &["NormalMap"],
