@@ -76,6 +76,7 @@
 | Camera | every client has Workspace.CurrentCamera (made when the place has none) | Roblox docs |
 | Output | every script line is tagged [Server] or [Client] while Play runs | person's request |
 | Explorer | Server / Client toggle at the top while Play runs; the viewport shows the side you pick | person's request |
+| Display pacing | with the gameplay step on its worker thread, each display frame waits for the step in flight, at most 66.7 ms (`PLAY_STEP_WAIT_MS`), so a frame shows a new state instead of the last one again | Studio 0.746 `SurfaceController::RenderJob::stepDataModelJob` (0x1013f2bc4) fires renderStep under the DataModel's write lock and hands that state to the render thread; the bound is estimated |
 
 ## Character (Play)
 
